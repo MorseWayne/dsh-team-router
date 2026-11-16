@@ -1,0 +1,31 @@
+# Merge this row into YOUR profile patch, after installing the bundle.
+# This replaces the complete team-router config. Replace all YOUR_* ids first.
+- id: team-router
+  config:
+    routes:
+      fast:
+        provider: YOUR_PROVIDER_ID
+        model: YOUR_FAST_MODEL_ID
+      deep:
+        provider: YOUR_PROVIDER_ID
+        model: YOUR_DEEP_MODEL_ID
+        # reasoningEffort: high  # Only if this exact model advertises support.
+      review:
+        provider: YOUR_PROVIDER_ID
+        model: YOUR_REVIEW_MODEL_ID
+    rules:
+      - id: complex-work
+        priority: 100
+        keywords: [架构, 重构, 疑难, implement, refactor, debug]
+        route: deep
+      - id: lightweight-work
+        priority: 10
+        keywords: [搜索, 查找, 总结, search, summarize, list]
+        route: fast
+    roles:
+      researcher: fast
+      implementer: deep
+      reviewer: review
+    # Leave unmatched members on their original inherited route.
+    # defaultRoute: deep
+    historyLimit: 100

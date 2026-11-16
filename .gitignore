@@ -1,0 +1,10 @@
+node_modules/
+*.tgz
+coverage/
+.npm-cache/
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+.DS_Store

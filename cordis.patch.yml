@@ -1,0 +1,7 @@
+# Install AFTER the official Agent Teams bundle. No native rows are replaced.
+# Empty configuration passes through: add exact routes/rules in your user patch.
+- insert:
+    - id: team-router
+      name: dsh-team-router
+      config:
+        routes: {}
