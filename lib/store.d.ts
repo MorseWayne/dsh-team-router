@@ -25,8 +25,9 @@ export interface TeamState {
 /** A single Host is the writer. Team identity is hashed only for safe filenames. */
 export declare class StateStore {
     readonly directory: string;
-    private readonly historyLimit;
+    private historyLimit;
     constructor(directory: string, historyLimit: number);
+    setHistoryLimit(value: number): void;
     path(teamId: string): string;
     load(teamId: string): TeamState;
     save(state: TeamState): void;

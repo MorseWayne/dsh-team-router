@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Team model router",
+    "description": "Visual route, task-rule, exact teammate-role, and fallback policy editor for native Agent Teams. Saves validated configuration atomically without replacing the team runtime."
+  }
+}

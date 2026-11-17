@@ -1,18 +1,23 @@
 import type { Context } from '@deepseek-ai/cordis';
+import { NativeTeams } from './native-team.ts';
+import { Config } from './config.ts';
+export { Config } from './config.ts';
 import type { NormalizedConfig } from './policy.ts';
 import { StateStore } from './store.ts';
 export declare const name = "team-router";
 export declare const inject: string[];
 /** Exposed for offline verification; mount through apply() in a real Host. */
 export declare class TeamRouter {
-    readonly policy: NormalizedConfig;
     readonly store: StateStore;
+    readonly teams: NativeTeams;
+    private readonly configuration;
+    get policy(): NormalizedConfig;
     private readonly states;
     private readonly runtimes;
     private readonly validated;
     private stopped;
     private readonly ctx;
-    constructor(ctx: Context, config: unknown);
+    constructor(ctx: Context, config: Config);
     private state;
     private commit;
     private caller;
@@ -25,6 +30,7 @@ export declare class TeamRouter {
     private tools;
     private install;
     start(): Promise<void>;
+    private release;
     stop(): void;
 }
-export declare function apply(ctx: Context, config?: unknown): Promise<void>;
+export declare function apply(ctx: Context, config: Config): Promise<void>;

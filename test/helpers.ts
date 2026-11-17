@@ -4,18 +4,20 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Context } from '@deepseek-ai/cordis';
 import type { Fiber } from '@deepseek-ai/cordis';
+import { updateVolatile } from '@deepseek-ai/cosmokit';
 import { AgentRegistry } from '@deepseek-ai/dsh-agent';
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent';
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
-import { TeamService } from '@deepseek-ai/dsh-experimental-agent-team';
+import { TeamService } from '@deepseek-ai/dsh-agent-team';
 import * as localFs from '@deepseek-ai/dsh-fs-local';
-import { LlmAdapter, LlmRuntime, createUserMessage } from '@deepseek-ai/dsh-llm';
+import { LlmAdapter, LlmRuntime, ReasoningEffortId, createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { ContentBlock, GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session';
 import * as jsonl from '@deepseek-ai/dsh-session-persistence-jsonl';
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
 import { SqliteSessionQueryEngine } from '@deepseek-ai/dsh-session-query-sqlite';
 import { SubagentRuntime } from '@deepseek-ai/dsh-subagent';
+import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
 import * as fork from '@deepseek-ai/dsh-subagent-fork-in-process';
 import * as spawn from '@deepseek-ai/dsh-subagent-spawn-in-process';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
@@ -24,11 +26,13 @@ import { ToolsService } from '@deepseek-ai/dsh-tools';
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory';
 import * as router from '../src/index.ts';
+import { NativeTeams } from '../src/native-team.ts';
+import type { Config as EffectiveRouterConfig } from '../src/config.ts';
 import type { RouterConfig } from '../src/policy.ts';
 
 export const text = (value: string): ContentBlock[] => [{ type: 'text', text: value }];
 export const route = (model: string, reasoningEffort?: string) => ({
-  provider: 'offline', model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+  provider: 'offline', model, ...(reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(reasoningEffort) }),
 });
 export const config = (): RouterConfig => ({
   routes: { fast: route('fast'), review: route('review', 'high'), strong: route('strong') },
@@ -53,8 +57,8 @@ export class OfflineAdapter extends LlmAdapter {
     const found = (await this.listModels(provider)).find((entry) => entry.id === model);
     assert.ok(found, `Unexpected offline model lookup: ${model}`);
     return { ...found, context: { contextWindow: 65536 }, reasoning: {
-      efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
-    } } as LlmResolvedModelInfo;
+      efforts: [{ id: ReasoningEffortId('low'), name: 'Low' }, { id: ReasoningEffortId('high'), name: 'High' }],
+    } };
   }
 
   private makeGate() {
@@ -108,24 +112,28 @@ export interface RouterStatus {
 export class NativeHarness {
   readonly ctx = new Context();
   readonly adapter = new OfflineAdapter();
+  readonly teams = new NativeTeams(this.ctx);
+  readonly activations = new Map<string, SubagentActivation>();
   readonly errors: Array<{ agent: Agent; error: unknown }> = [];
   readonly handles: AgentHandle[] = [];
   readonly created: Agent[] = [];
   readonly signals = new AbortController();
   readonly fibers: Fiber[] = [];
-  routerFiber?: Fiber;
+  routerFiber: Fiber | undefined;
   private serial = 0;
   private closed = false;
 
   readonly directory: string;
   readonly policy: RouterConfig;
-  private constructor(directory: string, policy: RouterConfig) {
+  private readonly defaultEnabled: boolean;
+  private constructor(directory: string, policy: RouterConfig, defaultEnabled: boolean) {
     this.directory = directory;
     this.policy = policy;
+    this.defaultEnabled = defaultEnabled;
   }
 
-  static async create(policy: RouterConfig = config()) {
-    const harness = new NativeHarness(await mkdtemp(join(tmpdir(), 'dsh-team-router-native-')), policy);
+  static async create(policy: RouterConfig = config(), defaultEnabled = true) {
+    const harness = new NativeHarness(await mkdtemp(join(tmpdir(), 'dsh-team-router-native-')), policy, defaultEnabled);
     try { await harness.mount(); return harness; }
     catch (error) { await harness.close(); throw error; }
   }
@@ -149,14 +157,15 @@ export class NativeHarness {
     this.fibers.push(await ctx.plugin(SubagentRuntime, { maxActiveSubagents: 32, maxDepth: 2 }));
     this.fibers.push(await ctx.plugin(spawn, { providerName: 'spawn' }));
     this.fibers.push(await ctx.plugin(fork, { providerName: 'fork' }));
-    this.fibers.push(await ctx.plugin(TeamService));
+    // Tests opt in explicitly; production/native Team mode defaults to false.
+    this.fibers.push(await ctx.plugin(TeamService, { defaultEnabled: this.defaultEnabled }));
     ctx.on('agent/error', ({ agent, error }) => { this.errors.push({ agent, error }); });
     ctx.on('agent/created', ({ agent }) => { this.created.push(agent); return undefined; });
     // Native continuable activations normally unload on empty-inbox settlement. Park a
     // non-waking native context at true idle so task/override assertions can use the same
     // live Agent. It is cleared synchronously before the next explicitly driven turn.
     ctx.on('agent/status', ({ agent, status }) => {
-      if (!this.closed && status === 'idle' && ctx.agentTeams.tryMembership(agent)?.role === 'teammate') {
+      if (!this.closed && status === 'idle' && this.teams.tryMembership(agent)?.role === 'teammate') {
         agent.inject(createUserMessage({ content: text('Parked offline test context.'), source: { kind: 'user' } }));
       }
     });
@@ -173,6 +182,21 @@ export class NativeHarness {
     this.routerFiber = await this.ctx.plugin(router, { ...this.policy, stateDir: join(this.directory, 'routes') });
   }
 
+  /** Test-only live commit: native candidate validation then Loader-style refs.
+   * This is not ConfigEditor persistence; those paths have separate real-Loader tests.
+   */
+  updatePolicy(policy: RouterConfig) {
+    const fiber = this.routerFiber;
+    assert.ok(fiber, 'A mounted native router Fiber is required');
+    const active = fiber.effectiveConfig as EffectiveRouterConfig;
+    const candidate = fiber.resolveConfig({ ...policy, stateDir: active.stateDir }) as EffectiveRouterConfig;
+    assert.equal(candidate.stateDir, active.stateDir, 'This helper only commits live policy fields');
+    for (const key of ['routes', 'rules', 'roles', 'defaultRoute', 'historyLimit'] as const) {
+      updateVolatile(active[key], candidate[key]);
+    }
+    assert.equal(fiber.effectiveConfig, active, 'Live updates retain the native effective config references');
+  }
+
   async lead(prefix = 'lead') {
     const handle = await this.ctx.agents.create({
       sessionId: SessionId(`${prefix}-${++this.serial}`),
@@ -184,13 +208,23 @@ export class NativeHarness {
   }
 
   async teammate(lead: Agent, name: string, prompt: string, provider: 'spawn' | 'fork' = 'spawn', description = 'Offline teammate') {
-    const result = await this.ctx.agentTeams.spawnTeammate(lead, {
-      name, description, prompt: text(prompt), provider,
-      context: provider === 'fork' ? 'fork' : 'fresh', signal: this.signals.signal,
+    const activation = await this.ctx.subagents.startActivation({
+      name, label: description, prompt: text(prompt), provider, parent: lead,
+      delivery: 'caller', signal: this.signals.signal,
     });
-    const agent = this.ctx.agents.get(result.member.id);
+    this.activations.set(activation.childId, activation);
+    const agent = this.ctx.agents.get(activation.childId);
     assert.ok(agent, `Native teammate ${name} should be resident`);
     return agent;
+  }
+
+  /** Dispose the exact native activation; future resumes have a different owner. */
+  async evict(agent: Agent) {
+    const activation = this.activations.get(agent.id);
+    assert.ok(activation, 'Cold-resume fixture requires its returned native activation');
+    await activation.dispose();
+    this.activations.delete(agent.id);
+    assert.equal(this.ctx.agents.get(agent.id), undefined);
   }
 
   requests(agent: Agent) {

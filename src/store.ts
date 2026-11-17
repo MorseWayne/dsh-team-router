@@ -53,10 +53,14 @@ function decision(value: unknown): Decision {
 /** A single Host is the writer. Team identity is hashed only for safe filenames. */
 export class StateStore {
   readonly directory: string;
-  private readonly historyLimit: number;
+  private historyLimit: number;
   constructor(directory: string, historyLimit: number) {
     this.directory = resolve(directory);
     this.historyLimit = historyLimit;
+  }
+  setHistoryLimit(value: number): void {
+    if (!Number.isInteger(value) || value < 1 || value > 1000) throw new Error('Invalid history limit');
+    this.historyLimit = value;
   }
   path(teamId: string): string {
     return join(this.directory, `${createHash('sha256').update(teamId).digest('hex')}.json`);

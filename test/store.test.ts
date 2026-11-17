@@ -41,6 +41,14 @@ test('state round-trips baselines, overrides and bounded history without temp ar
   assert.equal(statSync(store.path('team-a')).mode & 0o777, 0o600);
 });
 
+test('history limit updates apply to later cold state reads', (t) => {
+  const { store } = fixture(t);
+  store.save(filled(store));
+  store.setHistoryLimit(1);
+  assert.equal(store.load('team-a').history.length, 1);
+  assert.throws(() => store.setHistoryLimit(0));
+});
+
 test('canonical team ids prevent same-name cross-team overrides and path traversal', (t) => {
   const { directory, store } = fixture(t);
   store.save(filled(store, '../../team-a'));
