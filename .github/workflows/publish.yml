@@ -1,0 +1,81 @@
+name: CI and npm release
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - name: Verify release tag and main ancestry
+        if: github.ref_type == 'tag'
+        run: |
+          set -eu
+          node --input-type=commonjs <<'NODE'
+          const { name, version } = require('./package.json');
+          const lock = require('./package-lock.json');
+          if (name !== 'dsh-team-router' || !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)
+              || `v${version}` !== process.env.GITHUB_REF_NAME || lock.version !== version || lock.packages[''].version !== version) {
+            throw new Error('Expected a stable vX.Y.Z tag matching both the package and lockfile versions');
+          }
+          NODE
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - name: Install locked dependencies from npm
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/ --replace-registry-host=always
+      - name: Typecheck, test and build
+        run: npm run check
+      - name: Pack and check the installable bundle
+        run: |
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+          version=$(node -p "require('./package.json').version")
+          pkg="$RUNNER_TEMP/dsh-team-router-$version.tgz"
+          tar -tzf "$pkg" > "$RUNNER_TEMP/packed-files"
+          for file in package.json cordis.patch.yml lib/index.js lib/client.js; do
+            grep -Fxq "package/$file" "$RUNNER_TEMP/packed-files"
+          done
+      - name: Keep the tested tarball for publishing
+        if: github.ref_type == 'tag'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: npm-release
+          path: ${{ runner.temp }}/dsh-team-router-*.tgz
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: check
+    if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'MorseWayne/dsh-team-router'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: npm-release
+          path: ${{ runner.temp }}/release
+      - name: Publish the checked tarball via npm OIDC
+        run: |
+          npm publish "$RUNNER_TEMP/release/dsh-team-router-${GITHUB_REF_NAME#v}.tgz" \
+            --registry=https://registry.npmjs.org/ --access public --tag latest --provenance --ignore-scripts

@@ -17,7 +17,7 @@ Lead 判断是否分工
 
 ## 快速开始
 
-1. 在当前 DSH Web 对应的 profile 中，通过插件管理器安装本地目录或安装包并启用，刷新页面。
+1. 在当前 DSH Web 对应的 profile 中，通过插件管理器安装 npm 包 `dsh-team-router` 并启用，刷新页面。
 2. 打开 **插件 → 团队任务路由**，在说明下方的表格中编辑：首行是默认目标，其余七行左侧是类别，右侧是路由配置。也可从 **设置 → 团队任务路由** 进入。两处共用已保存的策略，不共享未保存的草稿。七类默认继承会话模型；可单独指定模型和推理强度，或点 **预览推荐配置 → 确认应用到草稿**，最后点 **保存策略**。
 3. 在主会话的 **模型与推理等级** 菜单开启 **启用智能体团队协作**。想验证配置时，可以说：「请按 `writing` 类别委派一份发布说明，再用 `team_route_status` 查看本次配置目标。」
 
@@ -44,3 +44,9 @@ Lead 判断是否分工
 运行 `npm ci --ignore-scripts` 安装依赖，`npm run check` 执行类型检查、测试和构建，`npm pack --ignore-scripts` 生成安装包。
 
 [V2 配置示例](<examples/router.patch.yml>) · [实施方案](<docs/IMPLEMENTATION_PLAN.md>) · [验证记录与外部执行器限制](<docs/IMPLEMENTATION_STATUS.md>) · [MIT 许可证](<LICENSE>)
+
+## 维护者发布
+
+[GitHub Actions](<.github/workflows/publish.yml>) 在面向 `main` 的 PR 和 `main` 推送上检查并打包，不发布。只有推送 `vX.Y.Z` 稳定版标签，且提交已在 `main`、版本与包清单及锁文件一致时，才将该次检查生成的安装包发布到 npm 的 `latest`。
+
+首次需由包维护者在 [npm 包设置](https://www.npmjs.com/package/dsh-team-router/access) 添加 GitHub Actions Trusted Publisher：仓库 `MorseWayne/dsh-team-router`、工作流 `publish.yml`、Environment 留空，允许 **Publish**。不需要 `NPM_TOKEN`。之后在干净、已同步的 `main` 上运行 `npm version patch`（或 `minor` / `major`），再运行 `git push --atomic origin main "$(git describe --tags --exact-match HEAD)"`，即可触发发布。
