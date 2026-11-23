@@ -1,6 +1,6 @@
 import * as React from 'react';
 import type { Context } from '@deepseek-ai/cordis';
-import { CATEGORY_LIST } from './categories.ts';
+import { CATEGORIES, CATEGORY_LIST } from './categories.ts';
 import type { CategoryLocale } from './categories.ts';
 import { RoutingEditor, routingDraftToPolicy } from './routing-editor.ts';
 import type { RoutingForm, RoutingSection, RoutingField, RoutingValidationIssue } from './routing-editor.ts';
@@ -13,6 +13,8 @@ const en = {
   language: 'en', title: 'Team task routing',
   description: 'Seven built-in task categories. Choose an executor and model for each; changes affect new delegations only, never a running task.',
   authorization: 'The model catalog is not authorization. Each delegation checks the current session policy and live capabilities again.',
+  categoryColumn: 'Task category', targetColumn: 'Routing configuration', defaultPurpose: 'Used by all categories without a custom target.',
+  draftTarget: 'Draft target: {target}',
   defaults: 'Default execution target', categories: 'Task presets', binding: 'Category target', useDefault: 'Use the default target', custom: 'Choose a target',
   switchingHint: 'Default/inherited modes deactivate explicit selections. Switching back restores them within this edit session; saving or reloading keeps only the selected mode.',
   executor: 'Executor', native: 'DSH native teammate', externalBlocked: 'P0 integration is not verified. External execution is unavailable; existing values are preserved, not proof of installation or authentication.',
@@ -48,6 +50,8 @@ const zh: Record<Key, string> = {
   language: 'zh', title: '团队任务路由',
   description: '内置七个任务类别，按类别选择执行器与模型。修改只影响后续新委派，不改变正在执行的任务。',
   authorization: '模型目录不等于授权。执行委派时仍会重新校验当前会话的模型权限与实际能力。',
+  categoryColumn: '任务类别', targetColumn: '路由配置', defaultPurpose: '所有未单独配置的类别都使用此目标。',
+  draftTarget: '草稿目标：{target}',
   defaults: '默认执行目标', categories: '任务预设', binding: '类别目标', useDefault: '使用默认执行目标', custom: '单独选择目标',
   switchingHint: '切换到默认/继承会停用自选值；本次编辑中切回可恢复。保存或重新读取后仅保留所选模式。',
   executor: '执行器', native: 'DSH 原生队友', externalBlocked: 'P0 接入验证尚未通过，外部执行暂不可用。已保存的值会保留；此状态不代表 CLI 未安装或未认证。',
@@ -86,17 +90,19 @@ interface ClientServices {
   on(event: string, listener: () => void): () => void;
 }
 const CSS = `
-.dtr-editor{color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.55;max-width:900px;min-width:0;margin:0 auto;padding:4px 0 24px}
+.dtr-editor{container:dtr-editor / inline-size;color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.55;width:100%;max-width:1140px;min-width:0;margin:0 auto;padding:4px 0 24px}
 .dtr-editor *{box-sizing:border-box}.dtr-editor h2{font-size:20px;line-height:1.4;margin:0 0 8px;font-weight:600}.dtr-editor h3{font-size:15px;margin:0;font-weight:600}
 .dtr-muted{color:var(--dsw-alias-label-secondary);font-size:13px;margin:4px 0 12px}.dtr-note{padding:12px;border:1px solid var(--dsw-alias-border-l3);border-radius:10px;margin:12px 0;background:var(--dsw-alias-bg-layer-1)}
 .dtr-section{border-top:1px solid var(--dsw-alias-border-l3);padding-top:20px;margin-top:22px}.dtr-actions,.dtr-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dtr-actions{justify-content:space-between}
-.dtr-card{border:1px solid var(--dsw-alias-border-l3);border-radius:12px;padding:14px;margin-top:12px;background:var(--dsw-alias-bg-layer-1)}.dtr-card code{font-size:12px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
-.dtr-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.dtr-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary)}.dtr-wide{grid-column:1/-1}
+.dtr-table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin-top:12px;border:1px solid var(--dsw-alias-border-l3);border-radius:10px;color:inherit}.dtr-category-col{width:26%}
+.dtr-table th,.dtr-table td{text-align:start;vertical-align:top;padding:12px 14px;overflow-wrap:anywhere}.dtr-table thead th{font-size:13px;font-weight:600;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1)}.dtr-table thead th:first-child{border-start-start-radius:9px}.dtr-table thead th:last-child{border-start-end-radius:9px}
+.dtr-table tbody th,.dtr-table td{border-block-start:1px solid var(--dsw-alias-border-l3)}.dtr-table td,.dtr-table thead th+th{border-inline-start:1px solid var(--dsw-alias-border-l3)}.dtr-table th[scope=row]{font-weight:400}.dtr-table th strong,.dtr-table th code,.dtr-purpose{display:block}.dtr-table th code{font-size:11px;color:var(--dsw-alias-label-secondary)}.dtr-purpose,.dtr-target-summary{color:var(--dsw-alias-label-secondary);font-size:12px;margin:4px 0 0}.dtr-table tr:focus-within th[scope=row]{box-shadow:inset 3px 0 var(--dsw-alias-brand-primary)}
+.dtr-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,10.5rem),1fr));gap:8px 12px;align-items:end}.dtr-controls>.dtr-target-summary{align-self:center}.dtr-table td>.dtr-target-summary{margin-top:8px}.dtr-field{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary)}
 .dtr-editor input,.dtr-editor select{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:8px 10px;min-width:0;width:100%}.dtr-editor input[type=checkbox]{width:auto}
 .dtr-editor button{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:7px 12px;cursor:pointer}.dtr-editor button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dtr-editor :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dtr-editor :disabled{opacity:.5;cursor:not-allowed}
 .dtr-editor button.dtr-primary{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);font-weight:600}.dtr-error{color:var(--dsw-alias-state-error-primary)}.dtr-warning{color:var(--dsw-alias-label-secondary);border-inline-start:3px solid var(--dsw-alias-state-warn-primary);padding-inline-start:10px}.dtr-success{border-inline-start:3px solid var(--dsw-alias-state-success-primary);padding-inline-start:10px}.dtr-message{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
 .dtr-editor [aria-invalid=true]{border-color:var(--dsw-alias-state-error-primary)}.dtr-footer{border-top:1px solid var(--dsw-alias-border-l3);margin-top:24px;padding-top:16px}.dtr-editor fieldset{border:0;margin:0;padding:0;min-width:0}.dtr-editor summary{cursor:pointer}.dtr-preview li{margin:8px 0;overflow-wrap:anywhere}
-@media(max-width:620px){.dtr-grid{grid-template-columns:minmax(0,1fr)}.dtr-editor{padding-bottom:16px}.dtr-card{padding:12px}}
+@container dtr-editor (max-width:600px){.dtr-category-col{width:30%}.dtr-table th,.dtr-table td{padding:9px 8px}.dtr-controls{gap:6px 8px}.dtr-table select{padding:7px 5px}}
 `;
 
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session'];
@@ -104,12 +110,22 @@ export function apply(ctx: Context): void {
   const client = ctx as unknown as ClientServices;
   ctx.effect(() => client.locale.register(NS, { en, zh }), 'team-router: editor dictionaries');
   const form = client.configForms.get('team-router');
-  const editor = new RoutingEditor(form);
   const readForm = () => form.getSnapshot();
   const subscribeForm = (listener: () => void) => form.subscribe(listener);
-  ctx.effect(() => () => editor.dispose(), 'team-router: staged routing editor');
 
   function Editor({ t }: { t: Translate }): React.ReactNode {
+    const [editor, setEditor] = React.useState<RoutingEditor>();
+    // Both pages observe the same Host config, but neither carries an unsaved
+    // draft or migration confirmation into the other. Subscribe only on mount.
+    React.useLayoutEffect(() => {
+      const mounted = new RoutingEditor(form);
+      setEditor(mounted);
+      return () => mounted.dispose();
+    }, []);
+    return editor ? <EditorForm t={t} editor={editor} /> : null;
+  }
+
+  function EditorForm({ t, editor }: { t: Translate; editor: RoutingEditor }): React.ReactNode {
     const host = React.useSyncExternalStore(subscribeForm, readForm);
     const state = React.useSyncExternalStore(editor.subscribe, editor.getSnapshot);
     const [catalog, setCatalog] = React.useState<ModelCatalog>();
@@ -121,6 +137,7 @@ export function apply(ctx: Context): void {
     const [previewError, setPreviewError] = React.useState<string>();
     const [focus, setFocus] = React.useState<string>();
     const fields = React.useRef(new Map<string, HTMLInputElement | HTMLSelectElement>());
+    const issueSummary = React.useRef<HTMLParagraphElement>(null);
     const instance = React.useId();
     const locale: CategoryLocale = t('language') === 'zh' ? 'zh' : 'en';
     const draft = state.draft;
@@ -153,11 +170,14 @@ export function apply(ctx: Context): void {
     React.useLayoutEffect(() => {
       if (!focus) return;
       const field = fields.current.get(focus);
-      if (field) {
+      if (field && !field.matches(':disabled')) {
         const details = field.closest('details');
         if (details) details.open = true;
-        field.focus(); setFocus(undefined);
+        field.focus();
+      } else {
+        issueSummary.current?.focus();
       }
+      setFocus(undefined);
     }, [focus, state.issue, draft]);
     const fieldKey = (section: RoutingSection, field: RoutingField): string => `${section}:${field}`;
     const fieldProps = (section: RoutingSection, field: RoutingField) => {
@@ -191,7 +211,6 @@ export function apply(ctx: Context): void {
       const model = explicit ? group?.models.find(model => model.id === explicit.id) : undefined;
       const efforts = model?.reasoning?.efforts ?? [];
       return <>
-        <div className="dtr-grid">
           <label className="dtr-field">{t('executor')}<select {...fieldProps(section, 'executor')} value={target.executor} onChange={() => updateTarget(section, { executor: 'native', model: { mode: 'inherit' } })}>
             <option value="native">{t('native')}</option><option value="codex" disabled>Codex · P0</option><option value="agy" disabled>Antigravity (agy) · P0</option><option value="cursor" disabled>Cursor · P0</option>
           </select></label>
@@ -207,15 +226,33 @@ export function apply(ctx: Context): void {
               <option value="">{t('chooseModel')}</option>{explicit.id && !model && <option value={explicit.id}>{t('unavailableOption', { name: explicit.id })}</option>}
               {group?.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
             </select></label>
-            {(efforts.length > 0 || explicit.reasoningEffort !== undefined) && <label className="dtr-field dtr-wide">{t('effort')}<select {...fieldProps(section, 'effort')} value={explicit.reasoningEffort ?? ''} disabled={!catalogReady || !model} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: explicit.provider, id: explicit.id, ...(event.target.value ? { reasoningEffort: event.target.value } : {}) } })}>
+            {(efforts.length > 0 || explicit.reasoningEffort !== undefined) && <label className="dtr-field">{t('effort')}<select {...fieldProps(section, 'effort')} value={explicit.reasoningEffort ?? ''} disabled={!catalogReady || !model} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: explicit.provider, id: explicit.id, ...(event.target.value ? { reasoningEffort: event.target.value } : {}) } })}>
               <option value="">{t('modelDefault')}</option>{explicit.reasoningEffort && !efforts.some(effort => effort.id === explicit.reasoningEffort) && <option value={explicit.reasoningEffort}>{t('unavailableOption', { name: explicit.reasoningEffort })}</option>}
               {efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}
             </select></label>}
           </>}
-        </div>
-        {target.executor !== 'native' && <p className="dtr-warning dtr-message">{t('externalBlocked')}</p>}
-        <p className="dtr-muted">{t('configured', { target: targetLabel(target) })}</p>
       </>;
+    };
+    const routeRow = (section: RoutingSection, name: string, purpose: string): React.ReactNode => {
+      if (!draft) return null;
+      const binding = section === 'default' ? undefined : draft.categories[section];
+      const inherited = binding?.mode === 'default';
+      const target = binding?.mode === 'target' ? binding.target : draft.defaultTarget;
+      const titleId = `dtr-${instance}-${section}-title`;
+      const summary = <p className="dtr-target-summary">{t(state.dirty ? 'draftTarget' : 'configured', { target: targetLabel(target) })}</p>;
+      return <tr key={section}>
+        <th scope="row"><strong id={titleId}>{name}</strong>{section !== 'default' && <code>{section}</code>}<span className="dtr-purpose">{purpose}</span></th>
+        <td><div role="group" aria-labelledby={titleId}>
+          <div className="dtr-controls">
+            {section !== 'default' && binding && <label className="dtr-field">{t('binding')}<select value={binding.mode} onChange={event => editor.setCategoryMode(section, event.target.value as 'default' | 'target', state.revision)}>
+              <option value="default">{t('useDefault')}</option><option value="target">{t('custom')}</option>
+            </select></label>}
+            {inherited ? summary : targetFields(section, target)}
+          </div>
+          {!inherited && summary}
+          {!inherited && target.executor !== 'native' && <p className="dtr-warning dtr-message">{t('externalBlocked')}</p>}
+        </div></td>
+      </tr>;
     };
     const save = (): void => {
       void editor.save({ ...(catalog === undefined ? {} : { catalog }), catalogReady }).then(() => {
@@ -246,20 +283,17 @@ export function apply(ctx: Context): void {
           {state.migrationConfirmed ? <p role="status">{t('migrationConfirmed')}</p> : <button type="button" disabled={disabled || state.stale} onClick={() => editor.confirmMigration(state.revision)}>{t('confirmMigration')}</button>}
         </section>}
         <fieldset disabled={disabled}>
-          <section className="dtr-section"><h3>{t('defaults')}</h3><div className="dtr-card">{targetFields('default', draft.defaultTarget)}</div></section>
-          <section className="dtr-section"><h3>{t('categories')}</h3><p className="dtr-muted">{t('recommendationHint', { version: RECOMMENDATION_VERSION })}</p>
+          <section className="dtr-section"><h3 id={`dtr-${instance}-presets`}>{t('categories')}</h3><p className="dtr-muted">{t('recommendationHint', { version: RECOMMENDATION_VERSION })}</p>
             <label className="dtr-inline dtr-muted"><input type="checkbox" checked={overwrite} onChange={event => setOverwrite(event.target.checked)} />{t('overwrite')}</label>
             <button type="button" disabled={!catalogReady || state.stale} onClick={makePreview}>{t('recommendations')}</button>
-            {CATEGORY_LIST.map(entry => {
-              const binding = draft.categories[entry.id];
-              return <section className="dtr-card" key={entry.id} aria-labelledby={`dtr-${instance}-${entry.id}-title`}>
-                <h3 id={`dtr-${instance}-${entry.id}-title`}>{entry[locale].name}</h3><code>{entry.id}</code><p className="dtr-muted">{entry[locale].purpose}</p>
-                <label className="dtr-field">{t('binding')}<select value={binding.mode} onChange={event => editor.setCategoryMode(entry.id, event.target.value as 'default' | 'target', state.revision)}>
-                  <option value="default">{t('useDefault')}</option><option value="target">{t('custom')}</option>
-                </select></label>
-                {binding.mode === 'target' ? targetFields(entry.id, binding.target) : <p className="dtr-muted">{t('configured', { target: targetLabel(draft.defaultTarget) })}</p>}
-              </section>;
-            })}
+            <table className="dtr-table" aria-labelledby={`dtr-${instance}-presets`}>
+              <colgroup><col className="dtr-category-col" /><col /></colgroup>
+              <thead><tr><th scope="col">{t('categoryColumn')}</th><th scope="col">{t('targetColumn')}</th></tr></thead>
+              <tbody>
+                {routeRow('default', t('defaults'), t('defaultPurpose'))}
+                {CATEGORY_LIST.map(entry => routeRow(entry.id, entry[locale].name, entry[locale].purpose))}
+              </tbody>
+            </table>
           </section>
           <details className="dtr-section"><summary>{t('advanced')}</summary><p className="dtr-warning dtr-message">Codex / Antigravity (agy) / Cursor: {t('externalBlocked')}</p>
             <label className="dtr-field">{t('historyLimit')}<input {...fieldProps('default', 'historyLimit')} type="number" min={1} max={1000} step={1} value={draft.historyLimit} onChange={event => editor.edit({ ...draft, historyLimit: event.target.value }, state.revision)} /></label>
@@ -276,7 +310,7 @@ export function apply(ctx: Context): void {
       </>}
       <div className="dtr-footer" aria-live="polite">
         {state.stale && <p className="dtr-warning dtr-message">{t('stale')}</p>}
-        {state.issue && <p id={`dtr-${instance}-issue`} role="alert" className="dtr-error dtr-message">{issueMessage(state.issue)}</p>}
+        {state.issue && <p ref={issueSummary} tabIndex={-1} id={`dtr-${instance}-issue`} role="alert" className="dtr-error dtr-message">{state.issue.section === 'default' ? t('defaults') : CATEGORIES[state.issue.section][locale].name} · {t(state.issue.field)}: {issueMessage(state.issue)}</p>}
         {previewError && <p role="alert" className="dtr-error dtr-message">{t('validationError', { message: previewError })}</p>}
         {state.error && <p role="alert" className="dtr-error dtr-message">{state.error.kind === 'refused' ? t('refused') : state.error.kind === 'migration' ? t('migrationRequired') : state.error.kind === 'previewChanged' ? t('previewChanged') : t(state.error.kind === 'validation' ? 'validationError' : 'transportError', { message: state.error.detail })}</p>}
         {state.notice === 'saved' && <p className="dtr-success dtr-message">{t('saved')}</p>}
@@ -288,6 +322,11 @@ export function apply(ctx: Context): void {
     </div>;
   }
   const t = client.locale.bind(NS);
+  // The bundle detail is keyed by npm package name, not the Host configuration row ID.
+  // Subscribe independently: a peer without the Plugins page can still use Settings.
+  ctx.effect(() => client.configForms.whileServed(['team-router'], () => client.slots.inject('plugins.bundle.config', () => client.slots.register({
+    name: 'plugins.bundle.config', key: 'dsh-team-router', locale: NS,
+  }, Editor))), 'team-router: bundle detail configuration');
   ctx.effect(() => client.configForms.whileServed(['team-router'], () => client.slots.inject('settings.section', () => client.slots.register({
     name: 'settings.section', id: 'team-router', order: 35, label: () => t('title'), locale: NS,
   }, Editor))), 'team-router: settings section');

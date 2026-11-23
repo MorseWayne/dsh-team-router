@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Team task routing",
-    "description": "Seven built-in task presets with authorized creation-time native model selection, recommendation previews and safe migration. External executors remain gated until their integrations are verified."
+    "description": "Choose models for native DSH teammates by task category. Once enabled, edit below the description on this page or in Settings → Team task routing. Save the policy to apply it to new routed tasks. External agents are not available."
   }
 }

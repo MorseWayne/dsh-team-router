@@ -142,6 +142,22 @@ describe('routing form and draft helpers', () => {
 });
 
 describe('revision-bound V2 editor', () => {
+  it('keeps bundle-detail and Settings drafts local while sharing only saved Host policy', async () => {
+    const form = new FakeForm();
+    const detail = new RoutingEditor(form);
+    const settings = new RoutingEditor(form);
+    editHistory(detail, '42');
+    assert.equal(settings.getSnapshot().draft!.historyLimit, '100');
+    assert.equal(await detail.save(), true);
+    assert.equal(settings.getSnapshot().draft!.historyLimit, '42');
+    editHistory(settings, '24');
+    settings.dispose();
+    const reopened = new RoutingEditor(form);
+    assert.equal(reopened.getSnapshot().draft!.historyLimit, '42');
+    assert.equal(form.writes.length, 1);
+    reopened.dispose(); detail.dispose();
+    assert.equal(form.listeners.size, 0);
+  });
   it('stages independent draft edits and persists only through an explicit save', async () => {
     const form = new FakeForm();
     const editor = new RoutingEditor(form);
