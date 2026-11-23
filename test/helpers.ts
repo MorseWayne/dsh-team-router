@@ -29,6 +29,25 @@ import * as router from '../src/index.ts';
 import { NativeTeams } from '../src/native-team.ts';
 import type { Config as EffectiveRouterConfig } from '../src/config.ts';
 import type { RouterConfig } from '../src/policy.ts';
+import type { RoutingPolicyV2, Target } from '../src/routing-policy.ts';
+import type { ExecutionRecord } from '../src/execution-store.ts';
+
+// Same released log-only event used by dsh-tool-subagent's user-controlled opt-in.
+// The harness appends through Session (never mutates the router's projection).
+declare module '@deepseek-ai/dsh-session/types' {
+  interface SessionEventMap {
+    'subagent/model-selection-policy': { allowedModels: Array<{ provider: string; model: string }> };
+  }
+}
+
+export const safePolicy = (): RoutingPolicyV2 => ({
+  version: 2, defaultTarget: { executor: 'native', model: { mode: 'inherit' } }, categories: {}, historyLimit: 100,
+});
+export const explicitTarget = (model: string, reasoningEffort?: string): Target => ({
+  executor: 'native', model: { mode: 'explicit', provider: 'offline', id: model,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
+});
+type HarnessConfig = RouterConfig | { policyV2: RoutingPolicyV2 };
 
 export const text = (value: string): ContentBlock[] => [{ type: 'text', text: value }];
 export const route = (model: string, reasoningEffort?: string) => ({
@@ -99,14 +118,13 @@ export class OfflineAdapter extends LlmAdapter {
 
 export interface RouterStatus {
   teamId: string;
-  members: Array<{
-    id: string; name: string; role: string;
-    lastUsed: ReturnType<typeof route> | null; nextSelection: ReturnType<typeof route> | null;
-    selected: ReturnType<typeof route> | null;
-    decision: { source: string; routeName?: string; ruleId?: string } | null;
-    manualRoute: string | null; error: string | null;
-  }>;
-  history: Array<{ memberId: string; boundary: string; source: string; route: ReturnType<typeof route>; ruleId?: string }>;
+  policy: RoutingPolicyV2;
+  migrationRequired: boolean;
+  externalExecutors: Record<'codex' | 'agy' | 'cursor', string>;
+  executions: Array<ExecutionRecord & { actualModel: ReturnType<typeof route> | null }>;
+}
+export interface Delegated {
+  kind: 'activation'; name: string; executionId: string; category: string; target: Target;
 }
 
 export class NativeHarness {
@@ -122,17 +140,24 @@ export class NativeHarness {
   routerFiber: Fiber | undefined;
   private serial = 0;
   private closed = false;
+  private readonly completing = new WeakSet<Agent>();
+
+  /** Let a selected real child settle naturally instead of parking test context. */
+  allowCompletion(agent: Agent) {
+    this.completing.add(agent);
+    agent.inbox.clear();
+  }
 
   readonly directory: string;
-  readonly policy: RouterConfig;
+  readonly policy: HarnessConfig;
   private readonly defaultEnabled: boolean;
-  private constructor(directory: string, policy: RouterConfig, defaultEnabled: boolean) {
+  private constructor(directory: string, policy: HarnessConfig, defaultEnabled: boolean) {
     this.directory = directory;
     this.policy = policy;
     this.defaultEnabled = defaultEnabled;
   }
 
-  static async create(policy: RouterConfig = config(), defaultEnabled = true) {
+  static async create(policy: HarnessConfig = { policyV2: safePolicy() }, defaultEnabled = true) {
     const harness = new NativeHarness(await mkdtemp(join(tmpdir(), 'dsh-team-router-native-')), policy, defaultEnabled);
     try { await harness.mount(); return harness; }
     catch (error) { await harness.close(); throw error; }
@@ -165,7 +190,7 @@ export class NativeHarness {
     // non-waking native context at true idle so task/override assertions can use the same
     // live Agent. It is cleared synchronously before the next explicitly driven turn.
     ctx.on('agent/status', ({ agent, status }) => {
-      if (!this.closed && status === 'idle' && this.teams.tryMembership(agent)?.role === 'teammate') {
+      if (!this.closed && !this.completing.has(agent) && status === 'idle' && this.teams.tryMembership(agent)?.role === 'teammate') {
         agent.inject(createUserMessage({ content: text('Parked offline test context.'), source: { kind: 'user' } }));
       }
     });
@@ -185,23 +210,23 @@ export class NativeHarness {
   /** Test-only live commit: native candidate validation then Loader-style refs.
    * This is not ConfigEditor persistence; those paths have separate real-Loader tests.
    */
-  updatePolicy(policy: RouterConfig) {
+  updatePolicy(policy: HarnessConfig) {
     const fiber = this.routerFiber;
     assert.ok(fiber, 'A mounted native router Fiber is required');
     const active = fiber.effectiveConfig as EffectiveRouterConfig;
     const candidate = fiber.resolveConfig({ ...policy, stateDir: active.stateDir }) as EffectiveRouterConfig;
     assert.equal(candidate.stateDir, active.stateDir, 'This helper only commits live policy fields');
-    for (const key of ['routes', 'rules', 'roles', 'defaultRoute', 'historyLimit'] as const) {
+    for (const key of ['policyV2', 'routes', 'rules', 'roles', 'defaultRoute', 'historyLimit'] as const) {
       updateVolatile(active[key], candidate[key]);
     }
     assert.equal(fiber.effectiveConfig, active, 'Live updates retain the native effective config references');
   }
 
-  async lead(prefix = 'lead') {
+  async lead(prefix = 'lead', reasoningEffort?: string) {
     const handle = await this.ctx.agents.create({
       sessionId: SessionId(`${prefix}-${++this.serial}`),
       meta: { cwd: this.directory },
-      agentOptions: route('strong'),
+      agentOptions: route('strong', reasoningEffort),
     });
     this.handles.push(handle);
     return handle.agent;
@@ -253,6 +278,28 @@ export class NativeHarness {
   }
 
   status(agent: Agent) { return this.tool<RouterStatus>(agent, 'team_route_status'); }
+
+  authorize(agent: Agent, models = ['strong', 'fast', 'review']) {
+    agent.session.append('subagent/model-selection-policy', {
+      allowedModels: models.map(model => ({ provider: 'offline', model })),
+    });
+  }
+
+  delegate(lead: Agent, category = 'unspecified', name = 'routed-worker', prompt = 'Produce evidence for this task.') {
+    return this.tool<Delegated>(lead, 'team_route_delegate', { category, name, prompt, description: 'Offline routed task' });
+  }
+
+  async child(lead: Agent, executionId: string) {
+    const record = (await this.status(lead)).executions.find(row => row.id === executionId);
+    assert.ok(record?.childId, 'Accepted routing must publish a native child identity');
+    const agent = this.ctx.agents.get(SessionId(record.childId));
+    assert.ok(agent, 'Native routed child must be resident');
+    return agent;
+  }
+
+  cancel(lead: Agent, executionId: string) {
+    return this.tool<{ executionId: string; stopped: boolean; sideEffectsRolledBack: boolean }>(lead, 'team_route_cancel', { executionId });
+  }
 
   async close() {
     if (this.closed) return;

@@ -1,31 +1,30 @@
-# Merge this row into YOUR profile patch, after installing the bundle.
-# This replaces the complete team-router config. Replace all YOUR_* ids first.
+# V2 shape reference. Prefer the native settings editor / ConfigEditor to save.
+# A nonempty legacy configuration requires explicit migration confirmation first.
+# Replace YOUR_* with exact IDs from the Host catalog and authorize them for the
+# Session before delegating; saving a model does not grant model access.
 - id: team-router
   config:
-    routes:
-      fast:
-        provider: YOUR_PROVIDER_ID
-        model: YOUR_FAST_MODEL_ID
-      deep:
-        provider: YOUR_PROVIDER_ID
-        model: YOUR_DEEP_MODEL_ID
-        # reasoningEffort: high  # Only if this exact model advertises support.
-      review:
-        provider: YOUR_PROVIDER_ID
-        model: YOUR_REVIEW_MODEL_ID
-    rules:
-      - id: complex-work
-        priority: 100
-        keywords: [架构, 重构, 疑难, implement, refactor, debug]
-        route: deep
-      - id: lightweight-work
-        priority: 10
-        keywords: [搜索, 查找, 总结, search, summarize, list]
-        route: fast
-    roles:
-      researcher: fast
-      implementer: deep
-      reviewer: review
-    # Leave unmatched members on their original inherited route.
-    # defaultRoute: deep
-    historyLimit: 100
+    policyV2:
+      version: 2
+      defaultTarget:
+        executor: native
+        model: { mode: inherit }
+      categories:
+        visual-engineering: { mode: default }
+        ultrabrain: { mode: default }
+        deep:
+          mode: target
+          target:
+            executor: native
+            model:
+              mode: explicit
+              provider: YOUR_PROVIDER_ID
+              id: YOUR_MODEL_ID
+              # reasoningEffort: high # Only when advertised by this exact model.
+        artistry: { mode: default }
+        quick: { mode: default }
+        unspecified: { mode: default }
+        writing: { mode: default }
+      historyLimit: 100
+# Codex, agy and Cursor targets are structurally represented in V2 but currently
+# refused at execution until their managed integration passes its safety gates.

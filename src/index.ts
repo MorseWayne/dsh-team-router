@@ -1,368 +1,263 @@
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
-import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent';
-import { NativeTeams } from './native-team.ts';
-import type { TeamMembership } from './native-team.ts';
-import { Config, installConfigValidation, readPolicy } from './config.ts';
+import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm';
+import type {} from '@deepseek-ai/dsh-session-projection';
+import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection';
+import { parentAgentOptionsForDelegation } from '@deepseek-ai/dsh-subagent';
+import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
 import type {} from '@deepseek-ai/dsh-settings';
-export { Config } from './config.ts';
-import type {} from '@deepseek-ai/dsh-llm';
-import type {} from '@deepseek-ai/dsh-session';
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { decide } from './policy.ts';
-import type { NormalizedConfig, Route } from './policy.ts';
-import { StateStore } from './store.ts';
-import type { TeamState } from './store.ts';
+import { NativeTeams } from './native-team.ts';
+import { Config, installConfigValidation, readRoutingState, requireRoutingPolicy } from './config.ts';
+import { CATEGORY_IDS, categorySelectionGuidance, getCategory } from './categories.ts';
+import { resolveRoutingSnapshot } from './routing-policy.ts';
+import { authorizationProjection, assertAuthorizedRoute } from './authorization.ts';
+import type { AuthorizedRoute } from './authorization.ts';
+import { ExecutionStore, policyDigest } from './execution-store.ts';
+export { Config } from './config.ts';
 
 export const name = 'team-router';
-export const inject = ['agents', 'agentTeams', 'subagents', 'tools', 'llm'];
+export const inject = ['agents', 'agentTeams', 'subagents', 'tools', 'llm', 'sessionProjections'];
 
-interface Runtime {
-  agent: Agent;
-  membership: TeamMembership;
-  turn: number;
-  text: string;
-  error?: string;
-  disposers: Array<() => void>;
-}
-const equal = (a: Route | undefined, b: Route | undefined): boolean => a?.provider === b?.provider
-  && a?.model === b?.model && a?.reasoningEffort === b?.reasoningEffort;
-const selection = (route: Route): ModelSelection => ({ ...route } as ModelSelection);
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
+interface DelegateArgs { category: string; prompt: string; description: string; name?: string; cwd?: string }
+interface ActiveExecution { teamId: string; id: string; activation: SubagentActivation; historyLimit: number }
 
-/** Exposed for offline verification; mount through apply() in a real Host. */
+/** P0 gates are intentional: installed CLI/LLM adapters are not necessarily safe
+ * out-of-process Agent backends. Do not silently downgrade to a raw shell command.
+ */
+export const EXTERNAL_GATES = Object.freeze({
+  codex: 'Codex task execution is not enabled: the dedicated runtime, permission roots and recursive-agent limits have not passed integration verification.',
+  agy: 'Antigravity task execution is not enabled: explicit permissions, no-replay behavior, managed cancellation and recursive-agent limits have not been verified.',
+  cursor: 'Cursor task execution is not enabled: the Agent backend, permission boundary, cancellation and recursive-agent limits have not been verified.',
+});
+
 export class TeamRouter {
-  readonly store: StateStore;
   readonly teams: NativeTeams;
-  private readonly configuration: Config;
-  get policy(): NormalizedConfig { return readPolicy(this.configuration); }
-  private readonly states = new Map<string, TeamState>();
-  private readonly runtimes = new Map<Agent, Runtime>();
-  private readonly validated = new Map<string, Promise<void>>();
+  readonly store: ExecutionStore;
+  private readonly registrations = new Map<Agent, Array<() => void>>();
+  private readonly active = new Map<string, ActiveExecution>();
+  private authorization!: ProjectionHandle<AuthorizedRoute[] | null>;
   private stopped = false;
   private readonly ctx: Context;
-
-  constructor(ctx: Context, config: Config) {
+  private readonly configuration: Config;
+  constructor(ctx: Context, configuration: Config) {
     this.ctx = ctx;
-    this.configuration = config;
+    this.configuration = configuration;
     this.teams = new NativeTeams(ctx);
-    const policy = readPolicy(config);
-    this.store = new StateStore(config.stateDir === undefined ? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'storages', 'team-router') : resolve(config.stateDir), policy.historyLimit);
+    this.store = new ExecutionStore(configuration.stateDir === undefined
+      ? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'storages', 'team-router')
+      : resolve(configuration.stateDir));
   }
-
-  private state(id: string): TeamState {
-    let state = this.states.get(id);
-    if (state === undefined) {
-      this.store.setHistoryLimit(this.policy.historyLimit);
-      state = this.store.load(id);
-      this.states.set(id, state);
-    }
-    return state;
-  }
-  private commit(state: TeamState): void {
-    this.store.save(state);
-    this.states.set(state.teamId, state);
-  }
-  private caller(agent: Agent | undefined): TeamMembership {
-    if (this.stopped) throw new Error('Team router has been disposed');
-    if (agent === undefined) throw new Error('A native Agent Teams caller is required');
+  private caller(agent: Agent | undefined, leadOnly = false) {
+    if (this.stopped || agent === undefined) throw new Error('A live native Agent Teams caller is required');
     const membership = this.teams.tryMembership(agent);
     if (membership === undefined) throw new Error('Caller is not a live native Agent Teams member');
+    if (leadOnly && membership.role !== 'lead') throw new Error('Only the Team Lead may delegate or cancel routed tasks');
     return membership;
   }
-
-  /** A bounded metadata check, not a provider health, quota, or billing probe. */
-  private async validate(route: Route, signal?: AbortSignal): Promise<void> {
-    const key = JSON.stringify(route);
-    let pending = this.validated.get(key);
-    if (pending === undefined) {
-      pending = (async () => {
-        if (!this.ctx.llm.listProviders().some((provider) => provider.id === route.provider)) throw new Error(`Unregistered model provider: ${route.provider}`);
-        const abort = AbortSignal.timeout(5000);
-        let listener: (() => void) | undefined;
-        try {
-          const models = await Promise.race([
-            this.ctx.llm.listModels(route.provider),
-            new Promise<never>((_resolve, reject) => {
-              listener = () => reject(new Error(`Model catalog timed out: ${route.provider}`));
-              abort.addEventListener('abort', listener, { once: true });
-            }),
-          ]);
-          if (!models.some((model) => model.id === route.model)) throw new Error(`Model is not advertised by ${route.provider}: ${route.model}. Add it to that provider's model catalog before routing.`);
-          await this.ctx.llm.resolveCallConfig(selection(route), abort);
-        } finally {
-          if (listener !== undefined) abort.removeEventListener('abort', listener);
-        }
-      })();
-      this.validated.set(key, pending);
-      void pending.catch(() => { if (this.validated.get(key) === pending) this.validated.delete(key); });
-    }
-    await pending;
-    signal?.throwIfAborted();
-  }
-
-  /** Select future steps at creation, first turn claim, task edges, or idle overrides; never rewrite an admitted step. */
-  private refresh(runtime: Runtime, force = false): void {
-    const { agent, membership } = runtime;
-    if (this.ctx.agents.get(agent.id) !== agent || this.teams.tryMembership(agent)?.role !== 'teammate') return;
-    const state = this.state(String(membership.id));
-    const tasks = this.ctx.agentTeams.listTasks(agent).filter((task) => task.ownerId === agent.id && task.status === 'in_progress');
-    const owned = tasks.length > 0 ? tasks : this.ctx.agentTeams.listTasks(agent).filter((task) => task.ownerId === agent.id && task.status === 'pending' && task.ready);
-    const ids = owned.map((task) => String(task.id)).sort();
-    const key = ids.length > 0 ? `tasks:${JSON.stringify(ids)}` : `turn:${runtime.turn}`;
-    const previous = state.members[String(agent.id)];
-    const manualRoute = state.overrides[String(agent.id)];
-    const sameOverride = previous?.decision.source === 'manual'
-      ? previous.decision.routeName === manualRoute : manualRoute === undefined;
-    if (!force && previous?.key === key && sameOverride) {
-      // A settings edit alone does not interrupt this task's latched choice.
-      if (!equal(agent.model.current(), previous.selected)) agent.model.select(selection(previous.selected));
-      return;
-    }
-    const baseline = previous?.baseline ?? agent.model.current();
-    if (baseline === undefined) throw new Error(`Teammate ${membership.name} has no complete inherited model route`);
-    const member = this.teams.liveMembers(agent).find((row) => row.id === agent.id);
-    const taskText = owned.length > 0 ? owned.map((task) => `${task.subject}\n${task.description}`).join('\n') : runtime.text || member?.description || '';
-    const policy = this.policy;
-    const decision = decide(policy, { memberName: membership.name, taskText, ...(manualRoute === undefined ? {} : { manualRoute }) });
-    const selected = decision.route ?? { ...baseline };
-    const changed = previous === undefined || previous.key !== key || JSON.stringify(previous.decision) !== JSON.stringify(decision) || !equal(previous.selected, selected);
-    if (changed) {
-      const next = structuredClone(state);
-      next.members[String(agent.id)] = { baseline: { ...baseline }, key, selected: { ...selected }, decision };
-      next.history.push({
-        at: new Date().toISOString(), memberId: String(agent.id), memberName: membership.name, boundary: key,
-        source: decision.source, route: { ...selected },
-        ...(decision.routeName === undefined ? {} : { routeName: decision.routeName }),
-        ...(decision.ruleId === undefined ? {} : { ruleId: decision.ruleId }),
-      });
-      next.history = next.history.slice(-policy.historyLimit);
-      this.commit(next);
-    }
-    if (!equal(agent.model.current(), selected)) agent.model.select(selection(selected));
-    delete runtime.error;
-  }
-  private safeRefresh(runtime: Runtime, force = false): void {
-    try { this.refresh(runtime, force); } catch (error) {
-      runtime.error = errorText(error);
-      this.ctx.logger.warn(`Team router blocked ${runtime.membership.name}: ${runtime.error}`);
-    }
-  }
-
-  private async status(agent: Agent) {
-    const membership = this.caller(agent);
-    const members = await this.teams.listMembers(agent);
-    if (this.caller(agent).root !== membership.root) throw new Error('Team identity changed while reading status');
-    const state = this.state(String(membership.id));
-    return {
-      teamId: String(membership.id),
-      routes: this.policy.routes,
-      members: members.map((member) => {
-        const live = this.ctx.agents.get(member.id);
-        const saved = state.members[String(member.id)];
-        return {
-          id: String(member.id), name: member.name, role: member.role, status: member.status,
-          lastUsed: live?.session.requestHeader()?.config ?? null,
-          nextSelection: live?.model.current() ?? null,
-          decision: saved?.decision ?? null,
-          selected: saved?.selected ?? null,
-          manualRoute: state.overrides[String(member.id)] ?? null,
-          error: live === undefined ? null : this.runtimes.get(live)?.error ?? null,
-        };
-      }),
-      history: state.history,
-    };
-  }
-
-  private tools(runtime: Runtime): void {
-    const output = { schema: { type: 'json' } as const, render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }] };
-    const caller = (agent: Agent | undefined): Agent => {
-      if (agent !== runtime.agent) throw new Error('Router tool caller does not match its registered Agent');
-      this.caller(agent);
-      return agent;
-    };
-    runtime.disposers.push(runtime.agent.ctx.tools.register(defineTool({
-      name: 'team_route_status',
-      description: 'Inspect this native Agent Team model routing: actual/selected models, named route whitelist, manual overrides, rule sources, and bounded decision history. Read-only; does not start any agent.',
-      parameters: {}, output,
-      execute: async (_args, exec) => JSON.parse(JSON.stringify(await this.status(caller(exec.agent)))),
-    })));
-    if (runtime.membership.role !== 'lead') return;
-    const target = async (agent: Agent, member: string) => {
-      const membership = this.caller(agent);
-      if (membership.role !== 'lead') throw new Error('Only the Team Lead may change model routes');
-      const row = (await this.teams.listMembers(agent)).find((item) => item.name === member && item.role === 'teammate' && item.status !== 'failed');
-      if (this.caller(agent).root !== membership.root) throw new Error('Team identity changed while resolving member');
-      if (row === undefined) throw new Error(`No routable teammate named ${member}`);
-      return { membership, row };
-    };
-    runtime.disposers.push(runtime.agent.ctx.tools.register(defineTool({
-      name: 'team_route_set',
-      description: 'Lead only: select one configured named model route for an existing native teammate. Override wins over rules; applies immediately if idle, otherwise at the next new turn or task boundary. Does not interrupt or wake the teammate.',
-      parameters: {
-        member: { type: 'string', required: true, description: 'Exact teammate name from list_agents or team_route_status.' },
-        route: { type: 'string', required: true, description: 'Exact configured route name from team_route_status; arbitrary provider/model strings are not accepted.' },
-      }, output,
-      execute: async (args, exec) => {
-        const agent = caller(exec.agent);
-        const { membership, row } = await target(agent, args.member);
-        const policy = this.policy;
-        const route = Object.hasOwn(policy.routes, args.route) ? policy.routes[args.route] : undefined;
-        if (route === undefined) throw new Error(`Unknown named route: ${args.route}`);
-        await this.validate(route, exec.signal);
-        // Recheck authority and identity after metadata I/O, before committing the side effect.
-        const current = await target(agent, args.member);
-        if (current.membership.id !== membership.id || current.row.id !== row.id) throw new Error('Team identity changed while validating route');
-        if (!equal(this.policy.routes[args.route], route)) throw new Error('Named route changed while validating it; inspect current policy and retry');
-        const next = structuredClone(this.state(String(membership.id)));
-        next.overrides[String(row.id)] = args.route;
-        this.commit(next);
-        const live = this.ctx.agents.get(row.id);
-        const tracked = live === undefined ? undefined : this.runtimes.get(live);
-        if (tracked !== undefined && live?.status === 'idle') this.refresh(tracked, true);
-        return { member: args.member, route: args.route, applies: live?.status === 'idle' ? 'next-step' : 'next-turn-or-task-boundary' };
-      },
-    })));
-    runtime.disposers.push(runtime.agent.ctx.tools.register(defineTool({
-      name: 'team_route_reset',
-      description: 'Lead only: remove one teammate manual route override. Falls back to task rules, then role/default, then the original inherited route at the next safe boundary; never interrupts or wakes work.',
-      parameters: { member: { type: 'string', required: true, description: 'Exact teammate name.' } }, output,
-      execute: async (args, exec) => {
-        const agent = caller(exec.agent);
-        const { membership, row } = await target(agent, args.member);
-        const next = structuredClone(this.state(String(membership.id)));
-        delete next.overrides[String(row.id)];
-        this.commit(next);
-        const live = this.ctx.agents.get(row.id);
-        const tracked = live === undefined ? undefined : this.runtimes.get(live);
-        if (tracked !== undefined && live?.status === 'idle') this.refresh(tracked, true);
-        return { member: args.member, reset: true, applies: live?.status === 'idle' ? 'next-step' : 'next-turn-or-task-boundary' };
-      },
-    })));
-  }
-
-  private async install(agent: Agent, signal?: AbortSignal, deferRoute = false): Promise<void> {
-    if (this.stopped || this.runtimes.has(agent)) return;
-    const membership = this.teams.tryMembership(agent);
-    if (membership === undefined) return; // Ordinary/workflow children must remain untouched.
-    if (agent.model?.select === undefined || agent.model.current === undefined) throw new Error('dsh-team-router requires the Agent.model API in DSH 0.2.2-rc.3');
-    const runtime: Runtime = { agent, membership, turn: 0, text: '', disposers: [] };
-    this.runtimes.set(agent, runtime);
+  private async preflight(options: AgentOptions, signal: AbortSignal): Promise<void> {
+    if (!options.provider || !options.model) throw new Error('The selected native target has no complete provider/model route');
+    const timeout = AbortSignal.timeout(5000);
+    const checkSignal = AbortSignal.any([signal, timeout]);
+    let abort: (() => void) | undefined;
     try {
-      this.tools(runtime);
-      if (membership.role === 'teammate' && !deferRoute) {
-        // rc.3 establishes runtime ancestry at subagent/start, before queuing input.
-        this.refresh(runtime, true);
-        const saved = this.state(String(membership.id)).members[String(agent.id)];
-        if (saved !== undefined && saved.decision.source !== 'inherit') await this.validate(saved.selected, signal);
-      }
+      await Promise.race([
+        (async () => {
+          const models = await this.ctx.llm.listModels(options.provider!);
+          checkSignal.throwIfAborted();
+          if (!models.some(model => model.id === options.model)) throw new Error('The configured model is not advertised by its provider; review the category settings');
+          await this.ctx.llm.resolveCallConfig({ provider: options.provider!, model: options.model!,
+            ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }) }, checkSignal);
+        })(),
+        new Promise<never>((_resolve, reject) => {
+          abort = () => reject(new Error(signal.aborted ? 'Routing preparation cancelled' : 'Model catalog preflight timed out'));
+          if (checkSignal.aborted) abort(); else checkSignal.addEventListener('abort', abort, { once: true });
+        }),
+      ]);
+    } finally { if (abort) checkSignal.removeEventListener('abort', abort); }
+  }
+
+  private async delegate(agent: Agent, args: DelegateArgs, signal: AbortSignal) {
+    const membership = this.caller(agent, true);
+    for (const [key, value] of Object.entries(args)) {
+      if (!['category', 'prompt', 'description', 'name', 'cwd'].includes(key)) throw new Error(`Unknown delegation field: ${key}`);
+      if (value !== undefined && (typeof value !== 'string' || value.trim() === '')) throw new Error(`Delegation ${key} must be a non-empty string`);
+    }
+    if (!args.prompt?.trim() || !args.description?.trim()) throw new Error('Delegation requires a task prompt and description');
+    if (args.prompt.length > 200_000 || args.description.length > 200) throw new Error('Task prompt or description exceeds the routing limit');
+    const policy = requireRoutingPolicy(this.configuration);
+    const digest = policyDigest(policy);
+    const snapshot = resolveRoutingSnapshot(policy, args.category);
+    if (snapshot.target.executor !== 'native') throw new Error(EXTERNAL_GATES[snapshot.target.executor]);
+    const provider = this.ctx.subagents.getProvider('spawn');
+    if (!provider?.prepareContinuable || !provider.capabilities.agentOptions || !provider.capabilities.depthLimit) {
+      throw new Error('The native spawn provider with model selection and depth enforcement is required');
+    }
+    const parentOptions = parentAgentOptionsForDelegation(agent);
+    const parentDigest = policyDigest(parentOptions);
+    const model = snapshot.target.model;
+    const options: AgentOptions = model.mode === 'inherit' ? { ...parentOptions } : {
+      provider: model.provider, model: model.id,
+      reasoningEffort: model.reasoningEffort === undefined ? undefined : ReasoningEffortId(model.reasoningEffort),
+    };
+    if (model.mode === 'explicit') assertAuthorizedRoute(this.authorization.stateOf(agent.session), parentOptions, { provider: model.provider, model: model.id });
+    await this.preflight(options, signal);
+    signal.throwIfAborted();
+    if (this.caller(agent, true).root !== membership.root) throw new Error('Team identity changed during routing preparation');
+    if (policyDigest(requireRoutingPolicy(this.configuration)) !== digest || policyDigest(parentAgentOptionsForDelegation(agent)) !== parentDigest) {
+      throw new Error('Routing configuration or inherited model changed before submission; inspect settings and delegate again');
+    }
+    if (this.ctx.subagents.getProvider('spawn') !== provider) throw new Error('Native spawn provider changed during preparation');
+    // Recheck authorization after metadata I/O, then submit without another await.
+    if (model.mode === 'explicit') assertAuthorizedRoute(this.authorization.stateOf(agent.session), parentOptions, { provider: model.provider, model: model.id });
+    const maxDepth = this.ctx.subagents.resolveMaxDepth(undefined);
+    const teamId = String(membership.id);
+    const record = this.store.begin(teamId, { category: snapshot.category, source: snapshot.source, target: snapshot.target, policyDigest: digest }, policy.historyLimit);
+    let activation: SubagentActivation;
+    try {
+      activation = await this.ctx.subagents.startActivation({
+        provider: 'spawn', parent: agent, label: args.description,
+        ...(args.name === undefined ? {} : { name: args.name }),
+        ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
+        ...(maxDepth === undefined ? {} : { maxDepth }),
+        agentOptions: options,
+        prompt: [{ type: 'text', text: `[Task category: ${snapshot.category}]\n${getCategory(snapshot.category).en.purpose}\nThis category does not grant additional permissions. Deliver evidence for the requested outcome; report blockers and partial side effects.\n\n${args.prompt}` }],
+        signal, delivery: 'parent',
+      });
     } catch (error) {
-      runtime.error = errorText(error);
+      // rc.3 can reject after inbox admission if activation publication fails;
+      // even cleanup failure is only logged by the manager. Never claim no effects.
+      try { this.store.update(teamId, record.id, { state: 'unknown', diagnostic: 'Startup did not return a confirmed activation. Admission, partial effects and cleanup may be uncertain. Inspect native children before retrying; no automatic replay was attempted.' }, policy.historyLimit); }
+      catch { this.ctx.logger.warn(`Could not persist uncertain startup for ${record.id}`); }
       throw error;
     }
+    const running = { teamId, id: record.id, activation, historyLimit: policy.historyLimit };
+    this.active.set(record.id, running);
+    void activation.result.then(result => {
+      this.store.update(teamId, record.id, {
+        state: result.stopReason === 'completed' ? 'completed' : result.stopReason === 'aborted' ? 'cancelled' : 'failed',
+        stopReason: result.stopReason,
+      }, policy.historyLimit);
+    }, () => {
+      this.store.update(teamId, record.id, { state: 'unknown', diagnostic: 'Managed execution outcome is unknown. No automatic replay was attempted.' }, policy.historyLimit);
+    }).catch(() => {
+      this.ctx.logger.warn(`Could not persist routing outcome for ${record.id}; inspect the native child outcome`);
+    }).finally(() => { this.active.delete(record.id); });
+    // Observe completion before any fallible post-start persistence or teardown.
+    try {
+      this.store.update(teamId, record.id, { state: 'running', childId: String(activation.childId), name: activation.name }, policy.historyLimit);
+    } catch (error) {
+      try { await activation.dispose(); }
+      catch { throw new Error(`Audit write failed for ${record.id} (${activation.name}); child cleanup is unconfirmed. Inspect the native child and partial effects before retrying.`, { cause: error }); }
+      throw new Error(`Audit write failed for ${record.id} (${activation.name}); managed teardown finished. Inspect partial effects before retrying.`, { cause: error });
+    }
+    return { kind: 'activation' as const, name: activation.name, executionId: record.id, category: snapshot.category, target: snapshot.target };
   }
 
+  private install(agent: Agent): void {
+    if (this.stopped || this.registrations.has(agent)) return;
+    const membership = this.teams.tryMembership(agent);
+    if (!membership) return;
+    const disposers: Array<() => void> = [];
+    this.registrations.set(agent, disposers);
+    const output = { schema: { type: 'json' } as const, render: (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }] };
+    const caller = (candidate: Agent | undefined, leadOnly = false): Agent => {
+      if (candidate !== agent) throw new Error('Routing tool caller does not match its registered Agent');
+      this.caller(candidate, leadOnly); return candidate;
+    };
+    disposers.push(agent.ctx.tools.register(defineTool({
+      name: 'team_route_status', description: 'Read configured task categories, migration status, requested targets and managed execution history. Actual models are only reported from native request headers; this does not start tasks.',
+      parameters: {}, output,
+      execute: async (_args, exec) => {
+        const current = caller(exec.agent);
+        const membership = this.caller(current);
+        const state = readRoutingState(this.configuration);
+        // Normalize optional audit fields to the tool's JSON-only wire contract.
+        return JSON.parse(JSON.stringify({
+          teamId: String(membership.id), policy: { ...state.policy }, migrationRequired: state.migrationRequired,
+          externalExecutors: EXTERNAL_GATES,
+          executions: this.store.list(String(membership.id)).map(record => {
+            const active = this.active.get(record.id);
+            const child = active ? this.ctx.agents.get(active.activation.childId) : undefined;
+            const actual = child?.session.requestHeader()?.config;
+            return { ...record, actualModel: actual === undefined ? null : {
+              provider: actual.provider, model: actual.model,
+              ...(actual.reasoningEffort === undefined ? {} : { reasoningEffort: actual.reasoningEffort }),
+            } };
+          }),
+        }));
+      },
+    })));
+    if (membership.role !== 'lead') return;
+    disposers.push(agent.ctx.tools.register(defineTool({
+      name: 'team_route_delegate',
+      description: `Delegate a self-contained task using one configured category. Only new routed delegations use category settings; ordinary subagent calls do not. The native child starts with the chosen model on its first request and returns a managed completion notice. External executors that have not passed safety gates are refused.\n${categorySelectionGuidance('en')}`,
+      parameters: {
+        category: { type: 'string', enum: [...CATEGORY_IDS], required: true, description: 'Choose by main deliverable, then execution style; unspecified is the last fallback.' },
+        prompt: { type: 'string', required: true, description: 'Self-contained goal, scope, constraints and acceptance criteria. The child does not inherit conversation history.' },
+        description: { type: 'string', required: true, description: 'Short task label, at most 200 characters.' },
+        name: { type: 'string', description: 'Optional native child name; lowercase words joined by hyphens, not lead.' },
+        cwd: { type: 'string', description: 'Optional initial directory within the delegated permission scope.' },
+      }, output,
+      isConcurrencySafe: () => true,
+      execute: (args, exec) => this.delegate(caller(exec.agent, true), args, exec.signal),
+    })));
+    disposers.push(agent.ctx.tools.register(defineTool({
+      name: 'team_route_cancel', description: 'Lead only: request cancellation of one active routed execution. Cancellation does not undo edits or commands. A returned cancelled status requires managed teardown to finish.',
+      parameters: { executionId: { type: 'string', required: true, description: 'Execution ID from team_route_delegate or team_route_status.' } }, output,
+      execute: async (args, exec) => {
+        const lead = caller(exec.agent, true);
+        const teamId = String(this.caller(lead).id);
+        const running = this.active.get(args.executionId);
+        if (!running || running.teamId !== teamId) throw new Error('No active routed execution with that ID in this team');
+        try { this.store.update(teamId, running.id, { state: 'cancelling' }, running.historyLimit); }
+        catch { this.ctx.logger.warn(`Could not persist cancellation request for ${running.id}; cancellation will still be attempted`); }
+        try { await running.activation.dispose(); }
+        catch { throw new Error('Cancellation has not been confirmed; inspect the native execution before retrying'); }
+        return { executionId: running.id, stopped: true, sideEffectsRolledBack: false };
+      },
+    })));
+    for (const toolName of ['team_route_set', 'team_route_reset']) disposers.push(agent.ctx.tools.register(defineTool({
+      name: toolName, description: 'Retired legacy member-model override. Use category settings and team_route_delegate for new work; this tool always refuses and never changes an existing teammate.',
+      parameters: { member: { type: 'string' }, route: { type: 'string' } }, output,
+      execute: (_args, exec) => { caller(exec.agent, true); throw new Error('Legacy member overrides have been retired. Configure task categories and start a new routed delegation.'); },
+    })));
+  }
+  private release(agent: Agent): void {
+    for (const dispose of this.registrations.get(agent) ?? []) dispose();
+    this.registrations.delete(agent);
+  }
   async start(): Promise<void> {
-    this.ctx.on('agent/created', async ({ agent, signal }) => { await this.install(agent, signal); return undefined; });
-    this.ctx.on('subagent/start', (info) => {
-      const agent = this.ctx.agents.get(info.id);
-      if (agent !== undefined) void this.install(agent).catch((error) => {
-        this.ctx.logger.warn(`Team router initialization blocked ${info.id}: ${errorText(error)}`);
-      });
-    });
-    this.ctx.on('agent/inbox/claimed', ({ agent, message, turn }) => {
-      const runtime = this.runtimes.get(agent);
-      if (runtime?.membership.role !== 'teammate' || runtime.turn === turn) return;
-      runtime.turn = turn;
-      runtime.text = message.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n');
-      this.safeRefresh(runtime, true); // This synchronous event precedes model.current() capture.
-    });
+    this.authorization = await this.ctx.sessionProjections.register(authorizationProjection);
+    this.ctx.on('agent/created', ({ agent }) => { this.install(agent); return undefined; });
+    this.ctx.on('subagent/start', info => { const agent = this.ctx.agents.get(info.id); if (agent) this.install(agent); });
+    this.ctx.on('agent/disposed', ({ agent }) => this.release(agent));
     this.ctx.on('session/event', (session, event) => {
-      if (event.type === 'team/mode') {
-        for (const runtime of [...this.runtimes.values()]) {
-          if (runtime.membership.root.session === session && !event.data.enabled) this.release(runtime);
-        }
-        if (event.data.enabled) for (const agent of this.ctx.agents.list()) {
-          if (this.teams.tryMembership(agent)?.root.session === session) void this.install(agent, undefined, agent.status === 'running').catch((error) => {
-            this.ctx.logger.warn(`Team router mode initialization failed: ${errorText(error)}`);
-          });
-        }
-        return;
+      if (event.type !== 'team/mode') return;
+      for (const agent of [...this.registrations.keys()]) {
+        if (this.ctx.subagents.rootOf(agent).session === session && !event.data.enabled) this.release(agent);
       }
-      if (event.type !== 'team/task') return;
-      for (const runtime of this.runtimes.values()) {
-        if (runtime.membership.role === 'teammate' && runtime.membership.root.session === session && String(runtime.membership.id) === String(event.data.teamId)) this.safeRefresh(runtime);
-      }
-    });
-    this.ctx.on('agent/pre-step', async (payload, next) => {
-      const runtime = this.runtimes.get(payload.agent);
-      if (runtime?.membership.role !== 'teammate') return next();
-      const assertPrepared = () => {
-        if (this.stopped) return undefined;
-        if (runtime.error !== undefined) throw new Error(runtime.error);
-        const saved = this.state(String(runtime.membership.id)).members[String(payload.agent.id)];
-        if (saved !== undefined && !equal(payload.modelSelection, saved.selected)) {
-          throw new Error('Team route changed during step preparation. Request blocked; inspect team_route_status and explicitly resend the input if still needed. No automatic replay.');
-        }
-        return saved;
-      };
-      const saved = assertPrepared();
-      if (saved !== undefined && saved.decision.source !== 'inherit') {
-        try {
-          // A settings edit is not a task boundary. Keep validating the existing
-          // latch even if its named route changed, until refresh chooses anew.
-          await this.validate(saved.selected, payload.signal);
-        } catch (error) { runtime.error = errorText(error); throw error; }
-      }
-      // Task commits can run while adapter metadata or downstream guards are awaited.
-      assertPrepared();
-      const decision = await next();
-      if (decision.kind !== 'reject') assertPrepared();
-      return decision; // Never replace this step's already-captured selection.
-    });
-    this.ctx.on('llm/adapters-updated', () => { this.validated.clear(); });
-    this.ctx.on('llm/models-updated', () => { this.validated.clear(); });
-    this.ctx.on('agent/disposed', ({ agent }) => {
-      const runtime = this.runtimes.get(agent);
-      if (runtime !== undefined) for (const dispose of runtime.disposers) dispose();
-      this.runtimes.delete(agent);
-      if (runtime?.membership.role === 'lead') this.states.delete(String(runtime.membership.id));
+      if (event.data.enabled) for (const agent of this.ctx.agents.list()) this.install(agent);
     });
     this.ctx.effect(() => () => this.stop(), 'teamRouter.cleanup');
-    for (const agent of this.ctx.agents.list()) {
-      // Installing the editor must not splice policy into an existing running turn.
-      await this.install(agent, undefined, agent.status === 'running');
-    }
+    for (const agent of this.ctx.agents.list()) this.install(agent);
   }
-
-  private release(runtime: Runtime): void {
-    for (const dispose of runtime.disposers) dispose();
-    if (runtime.membership.role === 'teammate' && this.ctx.agents.get(runtime.agent.id) === runtime.agent) {
-      const saved = this.states.get(String(runtime.membership.id))?.members[String(runtime.agent.id)];
-      // Do not overwrite a later selection made by another owner.
-      if (saved !== undefined && equal(runtime.agent.model.current(), saved.selected) && !equal(saved.selected, saved.baseline)) {
-        try { runtime.agent.model.select(selection(saved.baseline)); }
-        catch (error) { this.ctx.logger.warn(`Could not restore ${runtime.membership.name}: ${errorText(error)}`); }
-      }
-    }
-    this.runtimes.delete(runtime.agent);
-  }
-
   stop(): void {
     this.stopped = true;
-    for (const runtime of [...this.runtimes.values()]) this.release(runtime);
-    this.runtimes.clear();
-    this.states.clear();
-    this.validated.clear();
+    for (const agent of [...this.registrations.keys()]) this.release(agent);
+    // Already admitted activations belong to the native manager, not the settings
+    // plugin. They keep their chosen model and finish/notify normally after unload.
   }
 }
 
 export async function apply(ctx: Context, config: Config): Promise<void> {
-  readPolicy(config);
-  installConfigValidation(ctx);
-  ctx.inject(['settings'], (child) => {
+  readRoutingState(config);
+  const router = new TeamRouter(ctx, config);
+  installConfigValidation(ctx, legacy => { router.store.backupLegacy(legacy); });
+  ctx.inject(['settings'], child => {
     child.effect(() => child.settings.configure({ auto: false }, ctx.fiber), 'teamRouter.settingsPresentation');
   });
-  await new TeamRouter(ctx, config).start();
+  await router.start();
 }

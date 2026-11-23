@@ -1,106 +1,133 @@
 import * as React from 'react';
 import type { Context } from '@deepseek-ai/cordis';
-import { PolicyEditor, draftToPolicy, draftValidationIssue, policyRequiresCatalog, moveRule, rowKey } from './editor.ts';
-import type { DraftValidationIssue, ValidationField, EditorDraft, EditorForm, RouteRow, RuleRow, RoleRow } from './editor.ts';
+import { CATEGORY_LIST } from './categories.ts';
+import type { CategoryLocale } from './categories.ts';
+import { RoutingEditor, routingDraftToPolicy } from './routing-editor.ts';
+import type { RoutingForm, RoutingSection, RoutingField, RoutingValidationIssue } from './routing-editor.ts';
+import { previewRecommendations, RECOMMENDATION_VERSION } from './recommendations.ts';
+import type { ModelCatalog, RecommendationPreview } from './recommendations.ts';
+import type { CategoryBinding, Target } from './routing-policy.ts';
 
 const NS = 'teamRouter';
 const en = {
-  title: 'Team model routing', description: 'Route native teammates without replacing Agent Teams. Changes affect future turn/task boundaries, never an admitted model request.',
-  precedence: 'Priority: lead override → matching task rule → exact teammate name → default route → inherited model. Higher rule priority wins; ties follow row order.',
-  routes: 'Model routes', routesHint: 'Give each reusable provider/model selection a unique name. Models and reasoning efforts come from the live Host catalog.',
-  addRoute: 'Add route', routeName: 'Route name', provider: 'Provider', model: 'Model', effort: 'Reasoning effort', providerDefault: 'Provider default', chooseProvider: 'Choose a provider', chooseModel: 'Choose a model',
-  remove: 'Remove', removeRow: 'Remove {name}', notLoaded: '{name} (not currently available)',
-  rules: 'Task rules', rulesHint: 'Any keyword can match task text. ASCII words use word boundaries; other keywords use substring matching. Put one keyword on each line.',
-  addRule: 'Add rule', ruleId: 'Rule ID', ruleNumber: 'Rule {number}', priority: 'Priority (−1000 to 1000)', keywords: 'Keywords (one per line)', target: 'Target route', chooseRoute: 'Choose a route',
-  moveUp: 'Move rule up', moveDown: 'Move rule down', roles: 'Teammate roles', rolesHint: 'Exact native teammate names, not job categories. Whitespace and case are significant.', addRole: 'Add teammate role', memberName: 'Exact teammate name',
-  defaults: 'Fallback and history', defaultRoute: 'Default route', inherit: 'Inherit the teammate’s model', historyLimit: 'History limit (1–1000)',
-  loading: 'Loading Host configuration…', unavailable: 'The team-router entry is not served by this Host.', readOnly: 'This Host configuration is read-only.',
-  catalogLoading: 'Loading the live model catalog…', catalogError: 'Could not load the model catalog: {message}', catalogPartial: 'Some providers could not be loaded: {message}', retry: 'Retry catalog',
-  catalogRequired: 'Load the live model catalog before saving. Your draft has been kept.', catalogInvalid: 'Route “{name}” is not available in the live catalog. Check its provider, model, and reasoning effort. Your draft has been kept.',
-  save: 'Save policy', saving: 'Saving…', cancel: 'Cancel edits', reload: 'Discard draft and reload Host values', reset: 'Restore inherited policy', resetHint: 'Cancel edits first to restore the composition’s inherited policy. The state directory is never changed.',
-  saved: 'Policy saved. Future routing boundaries will use these values.', resetDone: 'Inherited policy restored.', dirty: 'Unsaved changes', current: 'Up to date',
-  stale: 'The Host changed while you were editing. Your draft is preserved; reload before applying a new edit.', refused: 'The Host refused this save (for example, a revision conflict or validation failure). Your draft is preserved. Reload explicitly or correct the configuration; no automatic overwrite was attempted.',
+  language: 'en', title: 'Team task routing',
+  description: 'Seven built-in task categories. Choose an executor and model for each; changes affect new delegations only, never a running task.',
+  authorization: 'The model catalog is not authorization. Each delegation checks the current session policy and live capabilities again.',
+  defaults: 'Default execution target', categories: 'Task presets', binding: 'Category target', useDefault: 'Use the default target', custom: 'Choose a target',
+  switchingHint: 'Default/inherited modes deactivate explicit selections. Switching back restores them within this edit session; saving or reloading keeps only the selected mode.',
+  executor: 'Executor', native: 'DSH native teammate', externalBlocked: 'P0 integration is not verified. External execution is unavailable; existing values are preserved, not proof of installation or authentication.',
+  modelMode: 'Model selection', inherit: 'Inherit the session model', explicit: 'Choose a model', executorDefault: 'Use the external agent’s default',
+  provider: 'Provider', model: 'Model', effort: 'Reasoning effort', modelDefault: 'Model default', chooseProvider: 'Choose a provider', chooseModel: 'Choose a model',
+  unavailableOption: '{name} (not available in this catalog)', configured: 'Configured target: {target}',
+  loading: 'Loading Host configuration…', unavailable: 'The team-router configuration is not served by this Host.', readOnly: 'This Host configuration is read-only.',
+  catalogLoading: 'Loading the live model catalog…', catalogError: 'Could not load the catalog: {message}', catalogPartial: 'Some providers failed: {message}', retry: 'Retry catalog',
+  recommendations: 'Preview recommendations', recommendationHint: 'Version {version}. Curated exact model IDs, not benchmark rankings. Missing candidates keep their current/default target. This does not grant session authorization.',
+  overwrite: 'Also replace my explicitly selected category targets', previewTitle: 'Review recommendation changes',
+  previewHint: 'Confirming only changes the draft. Save separately to apply it. The default target is not changed.',
+  applyPreview: 'Confirm changes to draft', cancelPreview: 'Keep current draft', noChanges: 'No matching changes to apply.',
+  preserved: 'Explicit selections preserved: {count}', unmatched: 'Categories without a matching candidate: {count}',
+  previewChanged: 'The draft or Host revision changed since the preview opened. Generate a new preview.',
+  migrationTitle: 'Confirm legacy policy migration',
+  migrationHint: 'Saving V2 retires legacy named routes, keyword rules, exact-name roles, and old member overrides. The Host must back up the legacy policy before committing. Only the old default model is mapped automatically.',
+  migrationCounts: '{routes} named routes, {rules} task rules, {roles} role mappings will stop participating in routing.',
+  confirmMigration: 'I confirm migration and retirement of the old routing rules', migrationConfirmed: 'Migration confirmed for this revision. Save to commit.',
+  migrationRequired: 'Confirm migration before saving. Your draft is preserved.',
+  advanced: 'Advanced settings and executor status', historyLimit: 'History limit (1–1000)',
+  save: 'Save policy', saving: 'Saving…', cancel: 'Cancel edits', reload: 'Discard draft and reload Host values',
+  saved: 'Policy saved. New delegations will use these settings.', dirty: 'Unsaved changes', current: 'Up to date',
+  stale: 'The Host changed while you were editing. Your draft is preserved; reload before saving.',
+  refused: 'The Host refused this save. Your draft is preserved; no automatic overwrite was attempted.',
   validationError: 'Invalid policy: {message}', transportError: 'Save failed: {message}. Your draft is preserved.',
-  noRoutes: 'No named routes. With no default, teammates inherit their model.', noRules: 'No task rules.', noRoles: 'No exact-name role mappings.', unknownRoute: '{name} (missing route)',
-  resetConfirmTitle: 'Restore inherited policy?', resetConfirmBody: 'This removes the five user overrides: routes, rules, roles, default route, and history limit. Composition values will apply again. The state directory and routing history files are preserved.', resetConfirm: 'Confirm restore', resetCancel: 'Keep current policy', resetChanged: 'The Host changed after this confirmation opened. Cancel and review the new values before restoring.',
-  ruleGroup: 'Task rule {number}: {name}', unnamed: 'unnamed', moveUpRule: 'Move rule {name} up', moveDownRule: 'Move rule {name} down', routeAdded: 'Route row {number} added. Enter its name.', ruleAdded: 'Rule row {number} added. Enter its ID.', roleAdded: 'Teammate role row {number} added. Enter the exact name.',
-  validationSummary: '{field}: {reason}', validationRequired: 'This field is required.', validationDuplicateRoute: 'Route names must be unique after trimming whitespace.', validationUnsafeName: 'This reserved name is not allowed.', validationRouteLimit: 'Use at most 64 model routes.', validationDuplicateRule: 'Rule IDs must be unique after trimming whitespace.', validationRuleLimit: 'Use at most 64 rules.', validationPriority: 'Enter an integer from −1000 to 1000.', validationKeywordLimit: 'Use at most 32 keywords.', validationKeywordLength: 'Each keyword must be at most 100 characters.', validationDuplicateRole: 'Each exact teammate name may appear only once.', validationUnknownRoute: 'Choose an existing named route.', validationHistory: 'Enter an integer from 1 to 1000.', validationCatalog: 'This selection is not available in the live model catalog.',
+  required: 'This field is required.', history: 'Enter an integer from 1 to 1000.', catalog: 'This provider, model or effort is not available in the live catalog.',
+  catalogRequired: 'A current model catalog is required for explicit native models. Inherited targets do not require it.',
+  externalUnavailable: 'This external executor has not passed integration verification. Select a native target before saving.',
+  structure: 'The policy structure is invalid.',
 };
 type Key = keyof typeof en;
 const zh: Record<Key, string> = {
-  title: '团队模型路由', description: '为原生队友分配模型，不替换 Agent Teams。修改仅在后续轮次或任务边界生效，不改变已开始的模型请求。',
-  precedence: '优先级：Lead 手动覆盖 → 匹配的任务规则 → 精确队友名 → 默认路由 → 继承模型。规则优先级数值越高越先匹配；同优先级按行顺序。',
-  routes: '模型路由', routesHint: '为可复用的供应商和模型组合设置唯一名称。模型及推理强度来自当前 Host 的实时目录。',
-  addRoute: '添加路由', routeName: '路由名称', provider: '供应商', model: '模型', effort: '推理强度', providerDefault: '供应商默认值', chooseProvider: '选择供应商', chooseModel: '选择模型',
-  remove: '删除', removeRow: '删除 {name}', notLoaded: '{name}（当前不可用）',
-  rules: '任务规则', rulesHint: '任一关键词可匹配任务文本。ASCII 单词按词边界匹配，其他关键词按子串匹配。每行填写一个关键词。',
-  addRule: '添加规则', ruleId: '规则 ID', ruleNumber: '规则 {number}', priority: '优先级（−1000 至 1000）', keywords: '关键词（每行一个）', target: '目标路由', chooseRoute: '选择路由',
-  moveUp: '上移规则', moveDown: '下移规则', roles: '队友角色', rolesHint: '填写精确的原生队友名称，而非岗位类别。名称区分大小写，空格也须一致。', addRole: '添加队友角色', memberName: '精确队友名称',
-  defaults: '默认策略与历史记录', defaultRoute: '默认路由', inherit: '继承队友的模型', historyLimit: '历史记录上限（1–1000）',
+  language: 'zh', title: '团队任务路由',
+  description: '内置七个任务类别，按类别选择执行器与模型。修改只影响后续新委派，不改变正在执行的任务。',
+  authorization: '模型目录不等于授权。执行委派时仍会重新校验当前会话的模型权限与实际能力。',
+  defaults: '默认执行目标', categories: '任务预设', binding: '类别目标', useDefault: '使用默认执行目标', custom: '单独选择目标',
+  switchingHint: '切换到默认/继承会停用自选值；本次编辑中切回可恢复。保存或重新读取后仅保留所选模式。',
+  executor: '执行器', native: 'DSH 原生队友', externalBlocked: 'P0 接入验证尚未通过，外部执行暂不可用。已保存的值会保留；此状态不代表 CLI 未安装或未认证。',
+  modelMode: '模型选择', inherit: '继承会话模型', explicit: '指定模型', executorDefault: '使用外部 Agent 自身默认模型',
+  provider: '供应商', model: '模型', effort: '推理强度', modelDefault: '模型默认', chooseProvider: '选择供应商', chooseModel: '选择模型',
+  unavailableOption: '{name}（当前目录不可用）', configured: '配置目标：{target}',
   loading: '正在读取 Host 配置…', unavailable: '当前 Host 未提供 team-router 配置项。', readOnly: '当前 Host 配置为只读。',
-  catalogLoading: '正在读取实时模型目录…', catalogError: '无法读取模型目录：{message}', catalogPartial: '部分供应商目录读取失败：{message}', retry: '重试读取目录',
-  catalogRequired: '保存前请先读取实时模型目录。你的草稿已保留。', catalogInvalid: '路由“{name}”不在实时模型目录中。请检查供应商、模型及推理强度。你的草稿已保留。',
-  save: '保存策略', saving: '保存中…', cancel: '取消修改', reload: '丢弃草稿并重新读取 Host 配置', reset: '恢复继承的策略', resetHint: '如需恢复组合层的继承策略，请先取消修改。此操作不会更改状态目录。',
-  saved: '策略已保存，将用于后续路由边界。', resetDone: '已恢复继承的策略。', dirty: '有未保存的修改', current: '已同步',
-  stale: '编辑期间 Host 配置已更新。你的草稿已保留；请先重新读取，再应用新的修改。', refused: 'Host 拒绝了本次保存（可能是版本冲突或配置校验未通过）。草稿已保留，请明确重新读取配置或修正输入；未自动覆盖其他修改。',
-  validationError: '策略不合法：{message}', transportError: '保存失败：{message}。你的草稿已保留。',
-  noRoutes: '尚无命名路由。未设置默认路由时，队友继承其模型。', noRules: '尚无任务规则。', noRoles: '尚无精确名称角色映射。', unknownRoute: '{name}（路由不存在）',
-  resetConfirmTitle: '恢复继承的策略？', resetConfirmBody: '此操作将清除路由、规则、角色、默认路由及历史上限这五项用户覆盖，重新使用组合层的配置。状态目录及路由历史文件会完整保留。', resetConfirm: '确认恢复', resetCancel: '保留当前策略', resetChanged: '确认界面打开后 Host 配置发生了变化。请先取消，检查最新配置后再恢复。',
-  ruleGroup: '任务规则 {number}：{name}', unnamed: '未命名', moveUpRule: '上移规则 {name}', moveDownRule: '下移规则 {name}', routeAdded: '已添加第 {number} 条路由，请填写名称。', ruleAdded: '已添加第 {number} 条规则，请填写 ID。', roleAdded: '已添加第 {number} 条队友角色，请填写精确名称。',
-  validationSummary: '{field}：{reason}', validationRequired: '此项不能为空。', validationDuplicateRoute: '去除首尾空格后的路由名称必须唯一。', validationUnsafeName: '不能使用此保留名称。', validationRouteLimit: '最多可配置 64 条模型路由。', validationDuplicateRule: '去除首尾空格后的规则 ID 必须唯一。', validationRuleLimit: '最多可配置 64 条规则。', validationPriority: '请输入 −1000 至 1000 之间的整数。', validationKeywordLimit: '最多可填写 32 个关键词。', validationKeywordLength: '每个关键词最多 100 个字符。', validationDuplicateRole: '同一个精确队友名称只能配置一次。', validationUnknownRoute: '请选择已存在的命名路由。', validationHistory: '请输入 1 至 1000 之间的整数。', validationCatalog: '此选项不在当前实时模型目录中。',
+  catalogLoading: '正在读取实时模型目录…', catalogError: '无法读取模型目录：{message}', catalogPartial: '部分供应商读取失败：{message}', retry: '重试读取目录',
+  recommendations: '预览推荐配置', recommendationHint: '推荐版本 {version}。使用人工维护的精确模型标识，不代表基准最优；无匹配项保留当前/默认目标，不扩大会话授权。',
+  overwrite: '同时替换我已单独选择的类别目标', previewTitle: '确认推荐配置差异',
+  previewHint: '确认后只更新草稿，仍需点击保存才会生效；不修改默认执行目标。',
+  applyPreview: '确认应用到草稿', cancelPreview: '保留当前草稿', noChanges: '当前没有可应用的匹配变更。',
+  preserved: '已保留自选类别：{count}', unmatched: '没有匹配候选的类别：{count}',
+  previewChanged: '预览打开后草稿或 Host 版本发生变化，请重新生成预览。',
+  migrationTitle: '确认迁移旧路由策略',
+  migrationHint: '保存 V2 后，旧命名路由、关键词规则、精确队友角色和成员覆盖不再参与路由。Host 必须先备份旧配置再提交；仅旧默认模型会自动映射。',
+  migrationCounts: '将停用 {routes} 条命名路由、{rules} 条任务规则、{roles} 条角色映射。',
+  confirmMigration: '确认迁移并停用旧路由规则', migrationConfirmed: '已确认此版本的迁移，点击保存后提交。',
+  migrationRequired: '保存前请明确确认迁移，草稿已保留。',
+  advanced: '高级设置与执行器状态', historyLimit: '历史记录上限（1–1000）',
+  save: '保存策略', saving: '保存中…', cancel: '取消修改', reload: '丢弃草稿并重新读取 Host 配置',
+  saved: '策略已保存，将用于后续新委派。', dirty: '有未保存的修改', current: '已同步',
+  stale: '编辑期间 Host 配置已更新。草稿已保留，请重新读取后再保存。',
+  refused: 'Host 拒绝了本次保存，草稿已保留；没有尝试自动覆盖其他修改。',
+  validationError: '策略不合法：{message}', transportError: '保存失败：{message}。草稿已保留。',
+  required: '此项不能为空。', history: '请输入 1 至 1000 之间的整数。', catalog: '供应商、模型或推理强度不在当前实时目录中。',
+  catalogRequired: '指定原生模型需要当前有效目录；继承模型不依赖目录读取成功。',
+  externalUnavailable: '此外部执行器尚未通过接入验证，请切换为原生目标后保存。', structure: '策略结构不合法。',
 };
 type Translate = (key: Key, params?: Record<string, string | number>) => string;
-interface CatalogModel { id: string; name: string; reasoning?: { efforts: Array<{ id: string; name: string }>; defaultEffort?: string } }
-interface Catalog { groups: Array<{ id: string; name: string; models: CatalogModel[] }>; failures: Array<{ id: string; name: string; message: string }> }
 interface ClientServices {
   locale: { register(ns: string, dictionaries: { en: typeof en; zh: typeof zh }): () => void; bind(ns: string): Translate };
-  configForms: { get(entry: string): EditorForm; whileServed(namespaces: string[], register: () => () => void): () => void };
+  configForms: { get(entry: string): RoutingForm; whileServed(namespaces: string[], register: () => () => void): () => void };
   slots: { inject(key: string, register: () => () => void): () => void; register(options: Record<string, unknown>, component: (props: { t: Translate }) => React.ReactNode): () => void };
-  remote: { session: { modelCatalog(): Promise<{ ok: true; value: Catalog } | { ok: false; error: { message: string } }> }; $on(event: string, listener: () => void): () => void };
+  remote: { session: { modelCatalog(): Promise<{ ok: true; value: ModelCatalog } | { ok: false; error: { message: string } }> }; $on(event: string, listener: () => void): () => void };
   on(event: string, listener: () => void): () => void;
 }
-
 const CSS = `
 .dtr-editor{color:var(--dsw-alias-label-primary);font-size:14px;line-height:1.55;max-width:900px;min-width:0;margin:0 auto;padding:4px 0 24px}
 .dtr-editor *{box-sizing:border-box}.dtr-editor h2{font-size:20px;line-height:1.4;margin:0 0 8px;font-weight:600}.dtr-editor h3{font-size:15px;margin:0;font-weight:600}
 .dtr-muted{color:var(--dsw-alias-label-secondary);font-size:13px;margin:4px 0 12px}.dtr-note{padding:12px;border:1px solid var(--dsw-alias-border-l3);border-radius:10px;margin:12px 0;background:var(--dsw-alias-bg-layer-1)}
-.dtr-section{border-top:1px solid var(--dsw-alias-border-l3);padding-top:20px;margin-top:22px}.dtr-section-head,.dtr-row-head,.dtr-actions{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
-.dtr-card{border:1px solid var(--dsw-alias-border-l3);border-radius:12px;padding:14px;margin-top:12px;background:var(--dsw-alias-bg-layer-1)}.dtr-row-head{margin-bottom:12px}.dtr-row-head strong{font-size:13px;overflow-wrap:anywhere}
+.dtr-section{border-top:1px solid var(--dsw-alias-border-l3);padding-top:20px;margin-top:22px}.dtr-actions,.dtr-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dtr-actions{justify-content:space-between}
+.dtr-card{border:1px solid var(--dsw-alias-border-l3);border-radius:12px;padding:14px;margin-top:12px;background:var(--dsw-alias-bg-layer-1)}.dtr-card code{font-size:12px;color:var(--dsw-alias-label-secondary);overflow-wrap:anywhere}
 .dtr-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.dtr-field{display:flex;flex-direction:column;gap:5px;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary)}.dtr-wide{grid-column:1/-1}
-.dtr-editor input,.dtr-editor select,.dtr-editor textarea{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:8px 10px;min-width:0;width:100%}.dtr-editor textarea{resize:vertical;min-height:86px}
+.dtr-editor input,.dtr-editor select{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:8px 10px;min-width:0;width:100%}.dtr-editor input[type=checkbox]{width:auto}
 .dtr-editor button{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:7px 12px;cursor:pointer}.dtr-editor button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dtr-editor :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dtr-editor :disabled{opacity:.5;cursor:not-allowed}
-.dtr-editor button.dtr-primary{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);font-weight:600}.dtr-editor button.dtr-danger,.dtr-error{color:var(--dsw-alias-state-error-primary)}.dtr-success{color:var(--dsw-alias-label-primary);border-inline-start:3px solid var(--dsw-alias-state-success-primary);padding-inline-start:10px}.dtr-warning{color:var(--dsw-alias-label-secondary);border-inline-start:3px solid var(--dsw-alias-state-warn-primary);padding-inline-start:10px}.dtr-message{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
-.dtr-field-error{font-size:12px;color:var(--dsw-alias-label-secondary)}.dtr-editor [aria-invalid=true]{border-color:var(--dsw-alias-state-error-primary)}.dtr-announcement{min-height:20px;font-size:13px;color:var(--dsw-alias-label-secondary)}.dtr-footer{border-top:1px solid var(--dsw-alias-border-l3);margin-top:24px;padding-top:16px}.dtr-inline{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.dtr-editor fieldset{border:0;margin:0;padding:0;min-width:0}.dtr-empty{font-size:13px;color:var(--dsw-alias-label-tertiary);margin:12px 0}
-@media(max-width:620px){.dtr-grid{grid-template-columns:minmax(0,1fr)}.dtr-editor{padding-bottom:16px}.dtr-card{padding:12px}.dtr-section-head{align-items:flex-start}}
+.dtr-editor button.dtr-primary{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);font-weight:600}.dtr-error{color:var(--dsw-alias-state-error-primary)}.dtr-warning{color:var(--dsw-alias-label-secondary);border-inline-start:3px solid var(--dsw-alias-state-warn-primary);padding-inline-start:10px}.dtr-success{border-inline-start:3px solid var(--dsw-alias-state-success-primary);padding-inline-start:10px}.dtr-message{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
+.dtr-editor [aria-invalid=true]{border-color:var(--dsw-alias-state-error-primary)}.dtr-footer{border-top:1px solid var(--dsw-alias-border-l3);margin-top:24px;padding-top:16px}.dtr-editor fieldset{border:0;margin:0;padding:0;min-width:0}.dtr-editor summary{cursor:pointer}.dtr-preview li{margin:8px 0;overflow-wrap:anywhere}
+@media(max-width:620px){.dtr-grid{grid-template-columns:minmax(0,1fr)}.dtr-editor{padding-bottom:16px}.dtr-card{padding:12px}}
 `;
 
-/** Cordis service injection and package activation dependencies are distinct contracts. */
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session'];
 export function apply(ctx: Context): void {
   const client = ctx as unknown as ClientServices;
   ctx.effect(() => client.locale.register(NS, { en, zh }), 'team-router: editor dictionaries');
   const form = client.configForms.get('team-router');
-  const editor = new PolicyEditor(form);
+  const editor = new RoutingEditor(form);
   const readForm = () => form.getSnapshot();
   const subscribeForm = (listener: () => void) => form.subscribe(listener);
-  ctx.effect(() => () => editor.dispose(), 'team-router: staged editor');
+  ctx.effect(() => () => editor.dispose(), 'team-router: staged routing editor');
 
-  function Editor(props: { t: Translate }): React.ReactNode {
-    const t = props.t;
+  function Editor({ t }: { t: Translate }): React.ReactNode {
     const host = React.useSyncExternalStore(subscribeForm, readForm);
     const state = React.useSyncExternalStore(editor.subscribe, editor.getSnapshot);
-    const [catalog, setCatalog] = React.useState<Catalog>();
+    const [catalog, setCatalog] = React.useState<ModelCatalog>();
     const [catalogBusy, setCatalogBusy] = React.useState(true);
     const [catalogError, setCatalogError] = React.useState<string>();
-    const [catalogProblem, setCatalogProblem] = React.useState<{ key: 'catalogRequired' | 'catalogInvalid'; name?: string }>();
     const [retry, setRetry] = React.useState(0);
-    const [resetConfirmation, setResetConfirmation] = React.useState<{ revision: number | undefined }>();
-    const [validationAttempted, setValidationAttempted] = React.useState(false);
-    const [externalIssue, setExternalIssue] = React.useState<DraftValidationIssue>();
-    const [pendingFocus, setPendingFocus] = React.useState<string>();
-    const [announcement, setAnnouncement] = React.useState<{ key: 'routeAdded' | 'ruleAdded' | 'roleAdded'; number: number; serial: string }>();
-    const fields = React.useRef(new Map<string, HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>());
-    const instanceId = React.useId();
+    const [overwrite, setOverwrite] = React.useState(false);
+    const [preview, setPreview] = React.useState<{ value: RecommendationPreview; revision: number | undefined }>();
+    const [previewError, setPreviewError] = React.useState<string>();
+    const [focus, setFocus] = React.useState<string>();
+    const fields = React.useRef(new Map<string, HTMLInputElement | HTMLSelectElement>());
+    const instance = React.useId();
+    const locale: CategoryLocale = t('language') === 'zh' ? 'zh' : 'en';
+    const draft = state.draft;
+    const hostDisabled = state.saving || host.status !== 'ready' || !host.writable;
+    const disabled = hostDisabled || preview !== undefined;
+    const catalogReady = catalog !== undefined && !catalogBusy && catalogError === undefined;
+
     React.useEffect(() => {
       let active = true;
       let generation = 0;
@@ -116,151 +143,148 @@ export function apply(ctx: Context): void {
           if (active && current === generation) setCatalogError(error instanceof Error ? error.message : String(error));
         } finally { if (active && current === generation) setCatalogBusy(false); }
       };
-      const listeners = [
-        ...['llm/adapters-updated', 'settings/document-updated', 'credentials/record-updated', 'credentials/reference-updated'].map(event => client.remote.$on(event, () => { void refresh(); })),
+      const stops = [
+        ...['llm/adapters-updated', 'llm/models-updated', 'settings/document-updated', 'credentials/record-updated', 'credentials/reference-updated'].map(event => client.remote.$on(event, () => { void refresh(); })),
         client.on('connection/reset', () => { void refresh(); }),
       ];
       void refresh();
-      return () => { active = false; generation++; for (const stop of listeners) stop(); };
+      return () => { active = false; generation++; for (const stop of stops) stop(); };
     }, [retry]);
-    const draft = state.draft;
-    const hostDisabled = state.saving || host.status !== 'ready' || !host.writable;
-    const disabled = hostDisabled || resetConfirmation !== undefined;
-    const issue = externalIssue ?? (validationAttempted && draft ? draftValidationIssue(draft) : undefined);
-    const fieldKey = (row: string, field: ValidationField): string => `${row}:${field}`;
-    const fieldId = (row: string, field: ValidationField): string => `dtr-${instanceId}-${row}-${field}`;
-    const focusIssue = (next: DraftValidationIssue): void => { setPendingFocus(fieldKey(next.rowKey, next.field)); };
     React.useLayoutEffect(() => {
-      if (pendingFocus === undefined) return;
-      const input = fields.current.get(pendingFocus);
-      if (input) { input.focus(); setPendingFocus(undefined); }
-    }, [pendingFocus, draft]);
-    const fieldProps = (row: string, field: ValidationField) => {
-      const invalid = issue?.rowKey === row && issue.field === field;
+      if (!focus) return;
+      const field = fields.current.get(focus);
+      if (field) {
+        const details = field.closest('details');
+        if (details) details.open = true;
+        field.focus(); setFocus(undefined);
+      }
+    }, [focus, state.issue, draft]);
+    const fieldKey = (section: RoutingSection, field: RoutingField): string => `${section}:${field}`;
+    const fieldProps = (section: RoutingSection, field: RoutingField) => {
+      const key = fieldKey(section, field);
+      const invalid = state.issue?.section === section && state.issue.field === field;
       return {
-        id: fieldId(row, field),
-        ref: (node: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | null): void => {
-          if (node) fields.current.set(fieldKey(row, field), node); else fields.current.delete(fieldKey(row, field));
+        id: `dtr-${instance}-${section}-${field}`,
+        ref: (node: HTMLInputElement | HTMLSelectElement | null): void => {
+          if (node) fields.current.set(key, node); else fields.current.delete(key);
         },
         'aria-invalid': invalid || undefined,
-        'aria-describedby': invalid ? `${fieldId(row, field)}-error` : undefined,
+        'aria-describedby': invalid ? `dtr-${instance}-issue` : undefined,
       };
     };
-    const fieldError = (row: string, field: ValidationField): React.ReactNode => issue?.rowKey === row && issue.field === field
-      ? <span className="dtr-field-error" id={`${fieldId(row, field)}-error`}>{t(issue.reasonKey)}</span> : null;
-    const edit = (next: EditorDraft): void => { setCatalogProblem(undefined); setExternalIssue(undefined); editor.edit(next, state.revision); };
-    const addRoute = (): void => {
+    const targetLabel = (target: Target): string => {
+      const executor = target.executor === 'native' ? t('native') : target.executor;
+      if (target.model.mode === 'inherit') return `${executor} · ${t('inherit')}`;
+      if (target.model.mode === 'executor-default') return `${executor} · ${t('executorDefault')}`;
+      const model = target.model;
+      return `${executor} · ${'provider' in model ? `${model.provider} / ` : ''}${model.id}${model.reasoningEffort ? ` · ${model.reasoningEffort}` : ''}`;
+    };
+    const bindingLabel = (binding: CategoryBinding): string => binding.mode === 'default' ? t('useDefault') : targetLabel(binding.target);
+    const updateTarget = (section: RoutingSection, target: Target): void => {
       if (!draft) return;
-      const key = rowKey();
-      edit({ ...draft, routes: [...draft.routes, { key, name: '', provider: '', model: '', reasoningEffort: '' }] });
-      setPendingFocus(fieldKey(key, 'routeName')); setAnnouncement({ key: 'routeAdded', number: draft.routes.length + 1, serial: key });
+      editor.edit(section === 'default' ? { ...draft, defaultTarget: target }
+        : { ...draft, categories: { ...draft.categories, [section]: { mode: 'target', target } } }, state.revision);
     };
-    const addRule = (): void => {
-      if (!draft) return;
-      const key = rowKey();
-      edit({ ...draft, rules: [...draft.rules, { key, id: '', keywords: '', route: '', priority: '0' }] });
-      setPendingFocus(fieldKey(key, 'ruleId')); setAnnouncement({ key: 'ruleAdded', number: draft.rules.length + 1, serial: key });
-    };
-    const addRole = (): void => {
-      if (!draft) return;
-      const key = rowKey();
-      edit({ ...draft, roles: [...draft.roles, { key, name: '', route: '' }] });
-      setPendingFocus(fieldKey(key, 'memberName')); setAnnouncement({ key: 'roleAdded', number: draft.roles.length + 1, serial: key });
-    };
-    const resetChanged = resetConfirmation !== undefined && (resetConfirmation.revision === undefined || host.revision !== resetConfirmation.revision || state.revision !== resetConfirmation.revision);
-    const routeNames = draft?.routes.map(route => route.name.trim()).filter(Boolean) ?? [];
-    const targetOptions = (current: string, optional = false): React.ReactNode => <>
-      <option value="">{t(optional ? 'inherit' : 'chooseRoute')}</option>
-      {current !== '' && !routeNames.includes(current) && <option value={current}>{t('unknownRoute', { name: current })}</option>}
-      {[...new Set(routeNames)].map(name => <option key={name} value={name}>{name}</option>)}
-    </>;
-    const updateRoute = (index: number, change: Partial<RouteRow>): void => {
-      if (draft) edit({ ...draft, routes: draft.routes.map((row, i) => i === index ? { ...row, ...change } : row) });
-    };
-    const updateRule = (index: number, change: Partial<RuleRow>): void => {
-      if (draft) edit({ ...draft, rules: draft.rules.map((row, i) => i === index ? { ...row, ...change } : row) });
-    };
-    const updateRole = (index: number, change: Partial<RoleRow>): void => {
-      if (draft) edit({ ...draft, roles: draft.roles.map((row, i) => i === index ? { ...row, ...change } : row) });
+    const targetFields = (section: RoutingSection, target: Target): React.ReactNode => {
+      const explicit = target.executor === 'native' && target.model.mode === 'explicit' ? target.model : undefined;
+      const group = explicit ? catalog?.groups.find(group => group.id === explicit.provider) : undefined;
+      const model = explicit ? group?.models.find(model => model.id === explicit.id) : undefined;
+      const efforts = model?.reasoning?.efforts ?? [];
+      return <>
+        <div className="dtr-grid">
+          <label className="dtr-field">{t('executor')}<select {...fieldProps(section, 'executor')} value={target.executor} onChange={() => updateTarget(section, { executor: 'native', model: { mode: 'inherit' } })}>
+            <option value="native">{t('native')}</option><option value="codex" disabled>Codex · P0</option><option value="agy" disabled>Antigravity (agy) · P0</option><option value="cursor" disabled>Cursor · P0</option>
+          </select></label>
+          {target.executor === 'native' && <label className="dtr-field">{t('modelMode')}<select value={target.model.mode} onChange={event => editor.setNativeModelMode(section, event.target.value as 'inherit' | 'explicit', state.revision)}>
+            <option value="inherit">{t('inherit')}</option><option value="explicit">{t('explicit')}</option>
+          </select></label>}
+          {explicit && <>
+            <label className="dtr-field">{t('provider')}<select {...fieldProps(section, 'provider')} value={explicit.provider} disabled={!catalogReady} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: event.target.value, id: '' } })}>
+              <option value="">{t('chooseProvider')}</option>{explicit.provider && !group && <option value={explicit.provider}>{t('unavailableOption', { name: explicit.provider })}</option>}
+              {catalog?.groups.map(group => <option value={group.id} key={group.id} disabled={catalog.failures.some(failure => failure.id === group.id)}>{group.name}</option>)}
+            </select></label>
+            <label className="dtr-field">{t('model')}<select {...fieldProps(section, 'model')} value={explicit.id} disabled={!catalogReady || !group || catalog?.failures.some(failure => failure.id === group.id)} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: explicit.provider, id: event.target.value } })}>
+              <option value="">{t('chooseModel')}</option>{explicit.id && !model && <option value={explicit.id}>{t('unavailableOption', { name: explicit.id })}</option>}
+              {group?.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+            </select></label>
+            {(efforts.length > 0 || explicit.reasoningEffort !== undefined) && <label className="dtr-field dtr-wide">{t('effort')}<select {...fieldProps(section, 'effort')} value={explicit.reasoningEffort ?? ''} disabled={!catalogReady || !model} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: explicit.provider, id: explicit.id, ...(event.target.value ? { reasoningEffort: event.target.value } : {}) } })}>
+              <option value="">{t('modelDefault')}</option>{explicit.reasoningEffort && !efforts.some(effort => effort.id === explicit.reasoningEffort) && <option value={explicit.reasoningEffort}>{t('unavailableOption', { name: explicit.reasoningEffort })}</option>}
+              {efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}
+            </select></label>}
+          </>}
+        </div>
+        {target.executor !== 'native' && <p className="dtr-warning dtr-message">{t('externalBlocked')}</p>}
+        <p className="dtr-muted">{t('configured', { target: targetLabel(target) })}</p>
+      </>;
     };
     const save = (): void => {
-      if (!draft) return;
-      setValidationAttempted(true); setExternalIssue(undefined);
-      const invalid = draftValidationIssue(draft);
-      if (invalid) { focusIssue(invalid); void editor.save(); return; }
-      // Structural validation still runs through the shared Host parser before any mutation.
-      let policy;
-      try { policy = draftToPolicy(draft); } catch { void editor.save(); return; }
-      if (policyRequiresCatalog(policy) && (!catalog || catalogError || catalogBusy)) { setCatalogProblem({ key: 'catalogRequired' }); return; }
-      for (const [name, route] of Object.entries(policy.routes)) {
-        const group = catalog?.groups.find(group => group.id === route.provider);
-        const model = group?.models.find(model => model.id === route.model);
-        if (!model || (route.reasoningEffort !== undefined && !model.reasoning?.efforts.some(effort => effort.id === route.reasoningEffort))) {
-          const row = draft.routes.find(row => row.name.trim() === name)!;
-          const problem: DraftValidationIssue = { rowKey: row.key, field: !group ? 'provider' : !model ? 'model' : 'effort', reasonKey: 'validationCatalog' };
-          setExternalIssue(problem); focusIssue(problem); setCatalogProblem({ key: 'catalogInvalid', name }); return;
-        }
-      }
-      setCatalogProblem(undefined);
-      void editor.save();
+      void editor.save({ ...(catalog === undefined ? {} : { catalog }), catalogReady }).then(() => {
+        const issue = editor.getSnapshot().issue;
+        if (issue) setFocus(fieldKey(issue.section, issue.field));
+      });
     };
+    const makePreview = (): void => {
+      if (!draft || !catalog || !catalogReady) return;
+      try {
+        setPreview({ value: previewRecommendations(routingDraftToPolicy(draft), catalog, { overwrite }), revision: state.revision });
+        setPreviewError(undefined);
+      } catch (error) { setPreviewError(error instanceof Error ? error.message : String(error)); }
+    };
+    const issueMessage = (issue: RoutingValidationIssue): string => issue.detail ?? t(issue.reason);
     return <div className="dtr-editor" aria-busy={state.saving}>
-      <style>{CSS}</style>
-      <h2>{t('title')}</h2><p className="dtr-muted">{t('description')}</p><div className="dtr-note dtr-muted">{t('precedence')}</div>
-      <div className="dtr-announcement" role="status" aria-live="polite" aria-atomic="true">{announcement && <span key={announcement.serial}>{t(announcement.key, { number: announcement.number })}</span>}</div>
+      <style>{CSS}</style><h2>{t('title')}</h2><p className="dtr-muted">{t('description')}</p><p className="dtr-note dtr-muted">{t('authorization')}</p><p className="dtr-muted">{t('switchingHint')}</p>
       {host.status === 'loading' && <p role="status">{t('loading')}</p>}
       {host.status === 'unavailable' && <p role="status">{t('unavailable')}</p>}
       {host.status === 'ready' && !host.writable && <p className="dtr-warning" role="status">{t('readOnly')}</p>}
-      <div className="dtr-inline">
-        {catalogBusy && <span className="dtr-muted" role="status">{t('catalogLoading')}</span>}
-        <button type="button" onClick={() => { setRetry(value => value + 1); }} disabled={catalogBusy}>{t('retry')}</button>
-      </div>
+      <div className="dtr-inline">{catalogBusy && <span className="dtr-muted" role="status">{t('catalogLoading')}</span>}<button type="button" onClick={() => setRetry(value => value + 1)} disabled={catalogBusy}>{t('retry')}</button></div>
       {catalogError && <p className="dtr-error dtr-message" role="alert">{t('catalogError', { message: catalogError })}</p>}
-      {catalog && catalog.failures.length > 0 && <p className="dtr-warning dtr-message" role="status">{t('catalogPartial', { message: catalog.failures.map(row => `${row.name}: ${row.message}`).join('; ') })}</p>}
+      {catalog && catalog.failures.length > 0 && <p className="dtr-warning dtr-message" role="status">{t('catalogPartial', { message: catalog.failures.map(entry => `${entry.name}: ${entry.message}`).join('; ') })}</p>}
       {draft && <>
+        {state.migrationRequired && <section className="dtr-note" aria-labelledby={`dtr-${instance}-migration`}>
+          <h3 id={`dtr-${instance}-migration`}>{t('migrationTitle')}</h3><p className="dtr-muted">{t('migrationHint')}</p>
+          <p>{t('migrationCounts', { routes: state.retired?.routes.length ?? 0, rules: state.retired?.ruleCount ?? 0, roles: state.retired?.roleCount ?? 0 })}</p>
+          {state.migrationConfirmed ? <p role="status">{t('migrationConfirmed')}</p> : <button type="button" disabled={disabled || state.stale} onClick={() => editor.confirmMigration(state.revision)}>{t('confirmMigration')}</button>}
+        </section>}
         <fieldset disabled={disabled}>
-          <section className="dtr-section"><div className="dtr-section-head"><h3>{t('routes')}</h3><button type="button" onClick={addRoute}>{t('addRoute')}</button></div>
-            <p className="dtr-muted">{t('routesHint')}</p>{draft.routes.length === 0 && <p className="dtr-empty">{t('noRoutes')}</p>}
-            {draft.routes.map((row, index) => {
-              const group = catalog?.groups.find(group => group.id === row.provider);
-              const model = group?.models.find(model => model.id === row.model);
-              const efforts = model?.reasoning?.efforts ?? [];
-              return <div className="dtr-card" key={row.key}><div className="dtr-row-head"><strong>{row.name || t('routeName')}</strong><button type="button" className="dtr-danger" aria-label={t('removeRow', { name: row.name || t('routeName') })} onClick={() => edit({ ...draft, routes: draft.routes.filter((_, i) => i !== index) })}>{t('remove')}</button></div><div className="dtr-grid">
-                <label className="dtr-field dtr-wide">{t('routeName')}<input {...fieldProps(row.key, 'routeName')} value={row.name} onChange={event => updateRoute(index, { name: event.target.value })} autoComplete="off" />{fieldError(row.key, 'routeName')}</label>
-                <label className="dtr-field">{t('provider')}<select {...fieldProps(row.key, 'provider')} value={row.provider} onChange={event => updateRoute(index, { provider: event.target.value, model: '', reasoningEffort: '' })}><option value="">{t('chooseProvider')}</option>{row.provider && !group && <option value={row.provider}>{t('notLoaded', { name: row.provider })}</option>}{catalog?.groups.map(group => <option key={group.id} value={group.id}>{group.name}</option>)}</select>{fieldError(row.key, 'provider')}</label>
-                <label className="dtr-field">{t('model')}<select {...fieldProps(row.key, 'model')} value={row.model} onChange={event => updateRoute(index, { model: event.target.value, reasoningEffort: '' })}><option value="">{t('chooseModel')}</option>{row.model && !model && <option value={row.model}>{t('notLoaded', { name: row.model })}</option>}{group?.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select>{fieldError(row.key, 'model')}</label>
-                <label className="dtr-field dtr-wide">{t('effort')}<select {...fieldProps(row.key, 'effort')} value={row.reasoningEffort} onChange={event => updateRoute(index, { reasoningEffort: event.target.value })}><option value="">{t('providerDefault')}</option>{row.reasoningEffort && !efforts.some(effort => effort.id === row.reasoningEffort) && <option value={row.reasoningEffort}>{t('notLoaded', { name: row.reasoningEffort })}</option>}{efforts.map(effort => <option key={effort.id} value={effort.id}>{effort.name}</option>)}</select>{fieldError(row.key, 'effort')}</label>
-              </div></div>;
+          <section className="dtr-section"><h3>{t('defaults')}</h3><div className="dtr-card">{targetFields('default', draft.defaultTarget)}</div></section>
+          <section className="dtr-section"><h3>{t('categories')}</h3><p className="dtr-muted">{t('recommendationHint', { version: RECOMMENDATION_VERSION })}</p>
+            <label className="dtr-inline dtr-muted"><input type="checkbox" checked={overwrite} onChange={event => setOverwrite(event.target.checked)} />{t('overwrite')}</label>
+            <button type="button" disabled={!catalogReady || state.stale} onClick={makePreview}>{t('recommendations')}</button>
+            {CATEGORY_LIST.map(entry => {
+              const binding = draft.categories[entry.id];
+              return <section className="dtr-card" key={entry.id} aria-labelledby={`dtr-${instance}-${entry.id}-title`}>
+                <h3 id={`dtr-${instance}-${entry.id}-title`}>{entry[locale].name}</h3><code>{entry.id}</code><p className="dtr-muted">{entry[locale].purpose}</p>
+                <label className="dtr-field">{t('binding')}<select value={binding.mode} onChange={event => editor.setCategoryMode(entry.id, event.target.value as 'default' | 'target', state.revision)}>
+                  <option value="default">{t('useDefault')}</option><option value="target">{t('custom')}</option>
+                </select></label>
+                {binding.mode === 'target' ? targetFields(entry.id, binding.target) : <p className="dtr-muted">{t('configured', { target: targetLabel(draft.defaultTarget) })}</p>}
+              </section>;
             })}
           </section>
-          <section className="dtr-section"><div className="dtr-section-head"><h3>{t('rules')}</h3><button type="button" onClick={addRule}>{t('addRule')}</button></div><p className="dtr-muted">{t('rulesHint')}</p>{draft.rules.length === 0 && <p className="dtr-empty">{t('noRules')}</p>}
-            {draft.rules.map((row, index) => <div className="dtr-card" key={row.key} role="group" aria-label={t('ruleGroup', { number: index + 1, name: row.id || t('unnamed') })}><div className="dtr-row-head"><strong>{row.id || t('ruleNumber', { number: index + 1 })}</strong><div className="dtr-inline"><button type="button" aria-label={t('moveUpRule', { name: row.id || t('ruleNumber', { number: index + 1 }) })} disabled={index === 0} onClick={() => edit({ ...draft, rules: moveRule(draft.rules, index, -1) })}>{t('moveUp')}</button><button type="button" aria-label={t('moveDownRule', { name: row.id || t('ruleNumber', { number: index + 1 }) })} disabled={index === draft.rules.length - 1} onClick={() => edit({ ...draft, rules: moveRule(draft.rules, index, 1) })}>{t('moveDown')}</button><button type="button" className="dtr-danger" aria-label={t('removeRow', { name: row.id || t('ruleNumber', { number: index + 1 }) })} onClick={() => edit({ ...draft, rules: draft.rules.filter((_, i) => i !== index) })}>{t('remove')}</button></div></div><div className="dtr-grid">
-              <label className="dtr-field">{t('ruleId')}<input {...fieldProps(row.key, 'ruleId')} value={row.id} onChange={event => updateRule(index, { id: event.target.value })} />{fieldError(row.key, 'ruleId')}</label><label className="dtr-field">{t('priority')}<input {...fieldProps(row.key, 'priority')} type="number" min={-1000} max={1000} step={1} value={row.priority} onChange={event => updateRule(index, { priority: event.target.value })} />{fieldError(row.key, 'priority')}</label>
-              <label className="dtr-field dtr-wide">{t('keywords')}<textarea {...fieldProps(row.key, 'keywords')} value={row.keywords} onChange={event => updateRule(index, { keywords: event.target.value })} />{fieldError(row.key, 'keywords')}</label><label className="dtr-field dtr-wide">{t('target')}<select {...fieldProps(row.key, 'target')} value={row.route} onChange={event => updateRule(index, { route: event.target.value })}>{targetOptions(row.route)}</select>{fieldError(row.key, 'target')}</label>
-            </div></div>)}
-          </section>
-          <section className="dtr-section"><div className="dtr-section-head"><h3>{t('roles')}</h3><button type="button" onClick={addRole}>{t('addRole')}</button></div><p className="dtr-muted">{t('rolesHint')}</p>{draft.roles.length === 0 && <p className="dtr-empty">{t('noRoles')}</p>}
-            {draft.roles.map((row, index) => <div className="dtr-card" key={row.key}><div className="dtr-row-head"><strong>{row.name || t('memberName')}</strong><button type="button" className="dtr-danger" aria-label={t('removeRow', { name: row.name || t('memberName') })} onClick={() => edit({ ...draft, roles: draft.roles.filter((_, i) => i !== index) })}>{t('remove')}</button></div><div className="dtr-grid"><label className="dtr-field">{t('memberName')}<input {...fieldProps(row.key, 'memberName')} value={row.name} onChange={event => updateRole(index, { name: event.target.value })} />{fieldError(row.key, 'memberName')}</label><label className="dtr-field">{t('target')}<select {...fieldProps(row.key, 'target')} value={row.route} onChange={event => updateRole(index, { route: event.target.value })}>{targetOptions(row.route)}</select>{fieldError(row.key, 'target')}</label></div></div>)}
-          </section>
-          <section className="dtr-section"><h3>{t('defaults')}</h3><div className="dtr-grid" style={{ marginTop: 12 }}><label className="dtr-field">{t('defaultRoute')}<select {...fieldProps('defaults', 'defaultRoute')} value={draft.defaultRoute} onChange={event => edit({ ...draft, defaultRoute: event.target.value })}>{targetOptions(draft.defaultRoute, true)}</select>{fieldError('defaults', 'defaultRoute')}</label><label className="dtr-field">{t('historyLimit')}<input {...fieldProps('defaults', 'historyLimit')} type="number" min={1} max={1000} step={1} value={draft.historyLimit} onChange={event => edit({ ...draft, historyLimit: event.target.value })} />{fieldError('defaults', 'historyLimit')}</label></div></section>
+          <details className="dtr-section"><summary>{t('advanced')}</summary><p className="dtr-warning dtr-message">Codex / Antigravity (agy) / Cursor: {t('externalBlocked')}</p>
+            <label className="dtr-field">{t('historyLimit')}<input {...fieldProps('default', 'historyLimit')} type="number" min={1} max={1000} step={1} value={draft.historyLimit} onChange={event => editor.edit({ ...draft, historyLimit: event.target.value }, state.revision)} /></label>
+          </details>
         </fieldset>
-        <div className="dtr-footer">
-          <div aria-live="polite">
-            {state.stale && <p className="dtr-warning dtr-message">{t('stale')}</p>}
-            {issue && <p role="alert" className="dtr-error dtr-message">{t('validationSummary', { field: t(issue.field), reason: t(issue.reasonKey) })}</p>}
-            {state.error && <p role="alert" className="dtr-error dtr-message">{state.error.kind === 'refused' ? t('refused') : t(state.error.kind === 'validation' ? 'validationError' : 'transportError', { message: state.error.detail })}</p>}
-            {catalogProblem && <p role="alert" className="dtr-error dtr-message">{t(catalogProblem.key, { name: catalogProblem.name ?? '' })}</p>}
-            {state.notice && <p className="dtr-success dtr-message">{t(state.notice === 'saved' ? 'saved' : 'resetDone')}</p>}
-          </div>
-          <div className="dtr-actions"><span className="dtr-muted">{t(state.dirty ? 'dirty' : 'current')}</span><div className="dtr-inline"><button type="button" disabled={state.saving || resetConfirmation !== undefined || (!state.dirty && !state.stale)} onClick={() => { setCatalogProblem(undefined); setExternalIssue(undefined); setValidationAttempted(false); editor.discard(); }}>{t(state.stale ? 'reload' : 'cancel')}</button><button type="button" className="dtr-primary" disabled={disabled || !state.dirty || state.stale || (catalogBusy && draft.routes.length > 0)} onClick={save}>{t(state.saving ? 'saving' : 'save')}</button></div></div>
-          <button type="button" style={{ marginTop: 14 }} disabled={disabled || state.dirty || state.stale} onClick={() => { setCatalogProblem(undefined); setResetConfirmation({ revision: state.revision }); }}>{t('reset')}</button><p className="dtr-muted">{t('resetHint')}</p>
-          {resetConfirmation && <div className="dtr-note" role="group" aria-labelledby={`dtr-${instanceId}-reset-title`} aria-describedby={`dtr-${instanceId}-reset-body`}>
-            <h3 id={`dtr-${instanceId}-reset-title`}>{t('resetConfirmTitle')}</h3><p className="dtr-muted" id={`dtr-${instanceId}-reset-body`}>{t('resetConfirmBody')}</p>
-            {resetChanged && <p className="dtr-warning dtr-message" role="status">{t('resetChanged')}</p>}
-            <div className="dtr-inline"><button type="button" autoFocus disabled={state.saving} onClick={() => { setResetConfirmation(undefined); }}>{t('resetCancel')}</button><button type="button" disabled={hostDisabled || state.dirty || resetChanged} onClick={() => { void editor.reset(resetConfirmation.revision).then(accepted => { if (accepted) { setResetConfirmation(undefined); setExternalIssue(undefined); setValidationAttempted(false); } }); }}>{t(state.saving ? 'saving' : 'resetConfirm')}</button></div>
-          </div>}
-        </div>
+        {preview && <section className="dtr-note dtr-preview" role="group" aria-labelledby={`dtr-${instance}-preview-title`}>
+          <h3 id={`dtr-${instance}-preview-title`}>{t('previewTitle')}</h3><p className="dtr-muted">{t('previewHint')}</p>
+          <ul>{preview.value.changes.map(change => <li key={change.category}><strong>{CATEGORY_LIST.find(entry => entry.id === change.category)?.[locale].name} · {change.category}</strong><br />{bindingLabel(change.before)} → {targetLabel(change.after.target)}</li>)}</ul>
+          {preview.value.changes.length === 0 && <p>{t('noChanges')}</p>}
+          {(preview.revision !== host.revision || preview.revision !== state.revision) && <p className="dtr-warning dtr-message" role="status">{t('previewChanged')}</p>}
+          <p className="dtr-muted">{t('preserved', { count: preview.value.preserved.length })} · {t('unmatched', { count: preview.value.unavailable.length })}</p>
+          <div className="dtr-inline"><button type="button" autoFocus onClick={() => setPreview(undefined)}>{t('cancelPreview')}</button><button type="button" disabled={hostDisabled || state.stale || preview.value.changes.length === 0 || preview.revision !== state.revision || host.revision !== preview.revision} onClick={() => { if (editor.applyRecommendations(preview.value, preview.revision)) setPreview(undefined); }}>{t('applyPreview')}</button></div>
+        </section>}
       </>}
+      <div className="dtr-footer" aria-live="polite">
+        {state.stale && <p className="dtr-warning dtr-message">{t('stale')}</p>}
+        {state.issue && <p id={`dtr-${instance}-issue`} role="alert" className="dtr-error dtr-message">{issueMessage(state.issue)}</p>}
+        {previewError && <p role="alert" className="dtr-error dtr-message">{t('validationError', { message: previewError })}</p>}
+        {state.error && <p role="alert" className="dtr-error dtr-message">{state.error.kind === 'refused' ? t('refused') : state.error.kind === 'migration' ? t('migrationRequired') : state.error.kind === 'previewChanged' ? t('previewChanged') : t(state.error.kind === 'validation' ? 'validationError' : 'transportError', { message: state.error.detail })}</p>}
+        {state.notice === 'saved' && <p className="dtr-success dtr-message">{t('saved')}</p>}
+        <div className="dtr-actions"><span className="dtr-muted">{t(state.dirty ? 'dirty' : 'current')}</span><div className="dtr-inline">
+          <button type="button" disabled={state.saving || preview !== undefined || (!state.dirty && !state.stale)} onClick={() => { setPreviewError(undefined); editor.discard(); }}>{t(state.stale ? 'reload' : 'cancel')}</button>
+          <button type="button" className="dtr-primary" disabled={disabled || !state.dirty || state.stale} onClick={save}>{t(state.saving ? 'saving' : 'save')}</button>
+        </div></div>
+      </div>
     </div>;
   }
   const t = client.locale.bind(NS);

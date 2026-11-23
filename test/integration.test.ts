@@ -1,489 +1,324 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { createUserMessage } from '@deepseek-ai/dsh-llm';
-import { NativeHarness, config, route, text } from './helpers.ts';
+import { NativeHarness, config, explicitTarget, route, safePolicy } from './helpers.ts';
+import type { RoutingPolicyV2 } from '../src/routing-policy.ts';
+import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
+import { ExecutionStore } from '../src/execution-store.ts';
 
-// No provider SDK, credentials, sockets, billing, or replay fixtures are involved.
-// All routing assertions below inspect real LlmAdapter dispatches, not options.
-describe('offline native DSH Agent Teams integration', { concurrency: false, timeout: 30_000 }, () => {
+// Real Cordis services, AgentLoop, Session events, Teams and native subagents;
+// only LLM transport is offline. Never executes an external CLI or network call.
+describe('V2 category routing through native DSH', { concurrency: false, timeout: 30_000 }, () => {
+  const quickPolicy = (): RoutingPolicyV2 => ({ ...safePolicy(), categories: {
+    quick: { mode: 'target', target: explicitTarget('fast') },
+    writing: { mode: 'target', target: explicitTarget('review', 'high') },
+  } });
+
+  it('starts safely with inherited model and records its real first request', async (t) => {
+    const h = await NativeHarness.create(); t.after(() => h.close());
+    const lead = await h.lead();
+    const result = await h.delegate(lead);
+    const child = await h.child(lead, result.executionId);
+    await h.idle(child, 1);
+    assert.equal(h.requests(child)[0]!.model, 'strong');
+    assert.equal(h.requests(child)[0]!.provider, 'offline');
+    const status = await h.status(lead);
+    assert.equal(status.migrationRequired, false);
+    assert.equal(status.executions[0]!.source, 'default');
+    assert.equal(status.executions[0]!.actualModel?.model, 'strong');
+    assert.equal(h.teams.tryMembership(child)?.root, lead);
+    assert.ok(h.teams.liveMembers(lead).some(member => member.id === child.id));
+    assert.deepEqual(lead.model.current(), route('strong'));
+  });
+
+  it('uses the authorized category on the first adapter request, never task keywords or name', async (t) => {
+    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const lead = await h.lead(); h.authorize(lead);
+    const quick = await h.delegate(lead, 'quick', 'reviewer', 'Review and audit complicated architecture.');
+    const worker = await h.child(lead, quick.executionId); await h.idle(worker, 1);
+    assert.equal(h.requests(worker)[0]!.model, 'fast');
+    const writing = await h.delegate(lead, 'writing', 'writer', 'List the repository files.');
+    const author = await h.child(lead, writing.executionId); await h.idle(author, 1);
+    assert.equal(h.requests(author)[0]!.model, 'review');
+    assert.equal(h.requests(author)[0]!.reasoningEffort, 'high');
+    assert.equal((await h.status(lead)).executions.find(row => row.id === quick.executionId)!.source, 'category');
+    assert.deepEqual(h.errors, []);
+  });
+
+  it('rejects explicit selection without Session opt-in before creating any child', async (t) => {
+    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const lead = await h.lead(); const before = h.created.length;
+    await assert.rejects(h.delegate(lead, 'quick'), /not authorized/i);
+    assert.equal(h.created.length, before);
+    assert.equal(h.adapter.requests.length, 0);
+    assert.deepEqual((await h.status(lead)).executions, []);
+  });
+
+  it('does not reuse another Team Session authorization', async (t) => {
+    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const authorized = await h.lead('allowed'); h.authorize(authorized);
+    const other = await h.lead('denied');
+    await assert.rejects(h.delegate(other, 'quick'), /not authorized/i);
+    const accepted = await h.delegate(authorized, 'quick');
+    await h.idle(await h.child(authorized, accepted.executionId), 1);
+    assert.deepEqual((await h.status(other)).executions, []);
+  });
+
+  for (const category of ['deep-low', 'deep-high', 'unspecified-low', 'unspecified-high', 'unknown', '__proto__', '']) {
+    it(`rejects invalid/retired category ${JSON.stringify(category)} before admission`, async (t) => {
+      const h = await NativeHarness.create(); t.after(() => h.close());
+      const lead = await h.lead();
+      await assert.rejects(h.delegate(lead, category));
+      assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
+      assert.deepEqual((await h.status(lead)).executions, []);
+    });
+  }
+
   for (const provider of ['spawn', 'fork'] as const) {
-    it(`${provider}: routes the very first prompt and exact role before request capture`, async (t) => {
-      const h = await NativeHarness.create();
-      t.after(() => h.close());
-      const lead = await h.lead();
-      await h.drive(lead, 'Please list the architecture and review it.', 1);
-      assert.equal(h.requests(lead)[0]!.model, 'strong', 'The Lead never takes a teammate route');
-
-      let createdBeforeOwnership = false;
-      let publishedBeforeInput = false;
-      h.ctx.on('agent/created', ({ agent }) => {
-        if (agent === lead) return undefined;
-        createdBeforeOwnership = h.teams.tryMembership(agent) === undefined;
-        return undefined;
-      });
-      h.ctx.on('subagent/start', (info) => {
-        const child = h.ctx.agents.get(info.id);
-        if (child === undefined || h.ctx.subagents.namesOf(child).self !== 'worker') return;
-        const membership = h.teams.tryMembership(child);
-        assert.equal(membership?.root, lead);
-        assert.equal(membership?.name, 'worker');
-        assert.ok(h.teams.liveMembers(lead).some((row) => row.id === child.id));
-        assert.equal(h.requests(child).length, 0);
-        assert.equal(h.ctx.sessionProjections.snapshot(lead.session, ['subagentCatalog']).values.subagentCatalog?.some((row) => row.id === child.id), false);
-        publishedBeforeInput = true;
-      });
-      const worker = await h.teammate(lead, 'worker', 'Please LIST the repository files.', provider);
-      await h.idle(worker, 1);
-      assert.equal(createdBeforeOwnership, true, 'agent/created precedes activation ownership in rc.3');
-      assert.equal(publishedBeforeInput, true, 'Native root/name are available at subagent/start before catalog/input publication');
-      assert.equal(h.requests(worker)[0]!.model, 'fast', 'Initial prompt routing must beat inherited strong');
-      assert.equal(h.requests(worker)[0]!.provider, 'offline');
-      assert.equal(h.requests(worker)[0]!.reasoningEffort, undefined);
-      let status = await h.status(lead);
-      assert.equal(status.members.find((member) => member.id === worker.id)!.decision!.source, 'task');
-      assert.equal(status.members.find((member) => member.id === worker.id)!.decision!.ruleId, 'cheap-list');
-
-      const reviewer = await h.teammate(lead, 'reviewer', 'Handle the ordinary work.', provider);
-      await h.idle(reviewer, 1);
-      assert.equal(h.requests(reviewer)[0]!.model, 'review');
-      assert.equal(h.requests(reviewer)[0]!.reasoningEffort, 'high');
-      status = await h.status(lead);
-      assert.equal(status.members.find((member) => member.id === reviewer.id)!.decision!.source, 'role');
-      assert.deepEqual(lead.model.current(), route('strong'));
-      assert.deepEqual(h.errors, []);
+    it(`does not rewrite ordinary ${provider}, Lead, names or keyword-looking prompts`, async (t) => {
+      const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+      const lead = await h.lead(); h.authorize(lead);
+      await h.drive(lead, 'Please list, review and audit everything.', 1);
+      const child = await h.teammate(lead, 'reviewer', 'Please LIST, REVIEW and AUDIT.', provider);
+      await h.idle(child, 1);
+      assert.equal(h.requests(lead)[0]!.model, 'strong');
+      assert.equal(h.requests(child)[0]!.model, 'strong');
+      assert.deepEqual((await h.status(lead)).executions, []);
     });
   }
 
-  it('routes real task ownership edges, latches edits, and rejects stale revisions', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const lead = await h.lead();
-    const worker = await h.teammate(lead, 'worker', 'Handle ordinary work.');
-    await h.idle(worker, 1);
-    const task = await h.ctx.agentTeams.createTask(lead, { subject: 'List files', description: 'Inventory the workspace' });
-    const assigned = await h.ctx.agentTeams.updateTask(lead, { taskId: task.id, expectedRevision: task.revision, action: 'reassign', owner: worker.id });
-    assert.equal(worker.model.current()!.model, 'fast');
-    assert.equal(assigned.status, 'in_progress', 'Native Lead reassign already starts the task');
-    assert.equal(assigned.ownerId, worker.id, 'Native task ownership is canonical SessionId, not its display name');
-    assert.equal(assigned.ownerName, 'worker');
-    const released = await h.ctx.agentTeams.updateTask(worker, { taskId: task.id, expectedRevision: assigned.revision, action: 'release' });
-    assert.equal(worker.model.current()!.model, 'strong');
-    const claimed = await h.ctx.agentTeams.updateTask(worker, { taskId: task.id, expectedRevision: released.revision, action: 'claim' });
-    assert.equal(claimed.status, 'in_progress');
-    const edited = await h.ctx.agentTeams.updateTask(lead, { taskId: task.id, expectedRevision: claimed.revision, action: 'edit', subject: 'Review security', description: 'Audit the change' });
-    assert.equal(worker.model.current()!.model, 'fast', 'Editing one task is not a new task boundary');
-    const before = (await h.status(lead)).history.length;
-    await assert.rejects(h.ctx.agentTeams.updateTask(worker, { taskId: task.id, expectedRevision: claimed.revision, action: 'complete' }));
-    assert.equal((await h.status(lead)).history.length, before);
-    await h.drive(worker, 'Continue the assigned work.', 2);
-    assert.equal(h.requests(worker).at(-1)!.model, 'review', 'A new turn re-evaluates authoritative task text');
-    await h.ctx.agentTeams.updateTask(worker, { taskId: task.id, expectedRevision: edited.revision, action: 'complete' });
-    assert.equal(worker.model.current()!.model, 'strong', 'Completed task owner must not retain its task route');
-    assert.deepEqual(h.errors, []);
+  it('snapshots new delegations while existing child continuation keeps its creation model', async (t) => {
+    const policy = quickPolicy();
+    const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
+    const lead = await h.lead(); h.authorize(lead);
+    const first = await h.delegate(lead, 'quick', 'first');
+    const child = await h.child(lead, first.executionId); await h.idle(child, 1);
+    const original = (await h.status(lead)).executions[0]!;
+    const next = quickPolicy(); next.categories.quick = { mode: 'target', target: explicitTarget('review', 'high') };
+    h.updatePolicy({ policyV2: next });
+    await h.drive(child, 'Continue the same child after settings changed.', 2);
+    assert.equal(h.requests(child)[1]!.model, 'fast');
+    const second = await h.delegate(lead, 'quick', 'second');
+    const newcomer = await h.child(lead, second.executionId); await h.idle(newcomer, 1);
+    assert.equal(h.requests(newcomer)[0]!.model, 'review');
+    const records = (await h.status(lead)).executions;
+    assert.deepEqual(records.find(row => row.id === first.executionId)!.target, original.target);
+    assert.notEqual(records.find(row => row.id === second.executionId)!.policyDigest, original.policyDigest);
   });
 
-  it('manual override/reset is Lead-only, whitelisted, and isolated between same-name teams', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const leadA = await h.lead('team-a');
-    const leadB = await h.lead('team-b');
-    const workerA = await h.teammate(leadA, 'worker', 'Ordinary work.');
-    const workerB = await h.teammate(leadB, 'worker', 'Ordinary work.');
-    await h.idle(workerA, 1);
-    await h.idle(workerB, 1);
-    assert.equal(h.ctx.tools.get('team_route_set', workerA), undefined);
-    await assert.rejects(h.tool(leadA, 'team_route_set', { member: 'worker', route: 'fast' }, workerA), /caller/i);
-    await assert.rejects(h.tool(leadA, 'team_route_set', { member: 'worker', route: '__proto__' }), /Unknown named route/);
-    await h.tool(leadA, 'team_route_set', { member: 'worker', route: 'fast' });
-    assert.equal(workerA.model.current()!.model, 'fast');
-    assert.equal(workerB.model.current()!.model, 'strong');
-    const stateA = await h.status(leadA);
-    const stateB = await h.status(leadB);
-    assert.notEqual(stateA.teamId, stateB.teamId);
-    assert.ok(stateA.history.every((event) => event.memberId === workerA.id));
-    assert.ok(stateB.history.every((event) => event.memberId === workerB.id));
-    await h.tool(leadA, 'team_route_reset', { member: 'worker' });
-    assert.deepEqual(workerA.model.current(), route('strong'));
-    assert.deepEqual(h.errors, []);
+  it('clears inherited effort for an explicit same-model target that omits effort', async (t) => {
+    const policy = safePolicy(); policy.defaultTarget = explicitTarget('strong');
+    const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
+    const lead = await h.lead('high-effort-lead', 'high');
+    await h.drive(lead, 'Confirm the parent high effort request.', 1);
+    assert.equal(h.requests(lead)[0]!.reasoningEffort, 'high');
+    const result = await h.delegate(lead);
+    const child = await h.child(lead, result.executionId); await h.idle(child, 1);
+    assert.equal(h.requests(child)[0]!.provider, 'offline');
+    assert.equal(h.requests(child)[0]!.model, 'strong');
+    assert.equal(h.requests(child)[0]!.reasoningEffort, undefined);
+    assert.equal(lead.model.current()!.reasoningEffort, 'high');
   });
 
-  it('queues a running member override without rewriting its in-flight request', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
+  it('merges old-run settlement and new-run audit across router unload/remount without losing native notices', async (t) => {
+    const h = await NativeHarness.create(); t.after(() => h.close());
     const lead = await h.lead();
-    const worker = await h.teammate(lead, 'worker', 'Ordinary work.');
-    await h.idle(worker, 1);
-    const gate = h.adapter.holdNextRequest();
-    const run = h.drive(worker, 'Continue ordinary work.', 2);
-    const inFlight = await gate.started;
-    try {
-      assert.equal(inFlight.model, 'strong');
-      await h.tool(lead, 'team_route_set', { member: 'worker', route: 'review' });
-      assert.equal(worker.model.current()!.model, 'strong');
-      assert.equal((await h.status(lead)).members.find((row) => row.id === worker.id)!.manualRoute, 'review');
-    } finally { gate.release(); }
-    await run;
-    assert.equal(h.requests(worker).at(-1)!.model, 'strong');
-    await h.drive(worker, 'Next ordinary work.', 3);
-    assert.equal(h.requests(worker).at(-1)!.model, 'review');
-    assert.equal(h.requests(worker).at(-1)!.reasoningEffort, 'high');
-  });
-
-  it('leaves a mode-off root and its ordinary native children untouched', async (t) => {
-    const h = await NativeHarness.create(config(), false);
-    t.after(() => h.close());
-    const lead = await h.lead();
-    assert.equal(h.ctx.agentTeams.isEnabled(lead), false);
-    assert.equal(h.teams.tryMembership(lead), undefined);
-    assert.equal(h.ctx.tools.get('team_route_status', lead), undefined);
-    const child = await h.ctx.subagents.startActivation({
-      provider: 'spawn', delivery: 'caller', label: 'ordinary child', name: 'reviewer',
-      parent: lead, prompt: text('Please LIST the files.'), signal: h.signals.signal,
+    const oldGate = h.adapter.holdNextRequest(); t.after(() => oldGate.release());
+    const oldRun = await h.delegate(lead, 'quick', 'old-generation'); await oldGate.started;
+    const oldChild = await h.child(lead, oldRun.executionId);
+    await h.unloadRouter();
+    assert.equal(h.ctx.tools.get('team_route_delegate', lead), undefined);
+    assert.equal(h.ctx.agents.get(oldChild.id), oldChild, 'Native manager, not router Fiber, owns the admitted run');
+    await h.reloadRouter();
+    assert.equal((await h.status(lead)).executions[0]!.state, 'unknown', 'Reload must not invent an active local handle');
+    const newGate = h.adapter.holdNextRequest(); t.after(() => newGate.release());
+    const newRun = await h.delegate(lead, 'writing', 'new-generation'); await newGate.started;
+    const newChild = await h.child(lead, newRun.executionId);
+    const oldEnded = Promise.withResolvers<void>(); const newEnded = Promise.withResolvers<void>();
+    const outcomes: string[] = [];
+    const dispose = h.ctx.on('subagent/end', info => {
+      if (info.id !== oldChild.id && info.id !== newChild.id) return;
+      assert.equal(info.stopReason, 'completed');
+      assert.deepEqual(info.lastAssistantMessage, [{ type: 'text', text: 'Offline completion.' }]);
+      outcomes.push(info.id);
+      (info.id === oldChild.id ? oldEnded : newEnded).resolve();
     });
-    assert.equal((await child.result).stopReason, 'completed');
-    const requests = h.adapter.requests.filter((request) => request.sessionId === child.childId);
-    assert.equal(requests.length, 1);
-    assert.equal(requests[0]!.model, 'strong', 'Neither role nor task rules apply when Team mode is off');
-    assert.deepEqual(h.teams.liveMembers(lead), []);
-    assert.deepEqual(await h.teams.listMembers(lead), []);
-    assert.equal(h.ctx.tools.get('team_route_set', lead), undefined);
-    assert.deepEqual(h.errors, []);
-  });
-
-  it('includes all continuable descendants of an enabled tree, not only direct children', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const lead = await h.lead();
-    const parent = await h.teammate(lead, 'worker', 'Ordinary work.');
-    await h.idle(parent, 1);
-    const nested = await h.teammate(parent, 'reviewer', 'Please list files.');
-    await h.idle(nested, 1);
-    const membership = h.teams.tryMembership(nested);
-    assert.equal(membership?.root, lead);
-    assert.equal(membership?.id, lead.id);
-    assert.equal(membership?.name, 'worker/reviewer');
-    assert.equal(membership?.role, 'teammate');
-    assert.equal(h.requests(nested)[0]!.model, 'fast');
-    const rows = (await h.status(lead)).members;
-    assert.ok(rows.some((row) => row.id === nested.id && row.name === 'worker/reviewer'));
-    await h.tool(lead, 'team_route_set', { member: 'worker/reviewer', route: 'review' });
-    assert.equal(nested.model.current()!.model, 'review');
-    await h.evict(nested);
-    assert.equal(h.teams.tryMembership(nested), undefined, 'A stale Agent object never regains authority');
-    assert.ok((await h.teams.listMembers(lead)).some((row) => row.id === nested.id && row.name === 'worker/reviewer'));
-  });
-
-  it('releases routing on mode-off and restores scoped routing on mode-on without waking members', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const lead = await h.lead();
-    const worker = await h.teammate(lead, 'worker', 'Ordinary work.');
-    await h.idle(worker, 1);
-    await h.tool(lead, 'team_route_set', { member: 'worker', route: 'fast' });
-    assert.equal(worker.model.current()!.model, 'fast');
-    await h.ctx.agentTeams.setEnabled(lead, false, h.signals.signal);
-    assert.equal(h.teams.tryMembership(worker), undefined);
-    assert.equal(h.ctx.tools.get('team_route_status', lead), undefined);
-    assert.equal(h.ctx.tools.get('team_route_status', worker), undefined);
-    assert.deepEqual(worker.model.current(), route('strong'));
-    await h.ctx.agentTeams.setEnabled(lead, true, h.signals.signal);
-    assert.equal(h.teams.tryMembership(worker)?.name, 'worker');
-    assert.equal(worker.model.current()!.model, 'fast');
-    assert.equal(h.ctx.tools.definitions(lead).filter((tool) => tool.name === 'team_route_set').length, 1);
-    assert.equal(h.ctx.tools.definitions(worker).filter((tool) => tool.name === 'team_route_status').length, 1);
-    assert.equal(h.requests(worker).length, 1, 'Mode changes and override restoration never dispatch a request');
-    assert.deepEqual(h.errors, []);
-  });
-
-  it('restores live baselines and scoped tools on unload without clobbering another selection', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const lead = await h.lead();
-    const first = await h.teammate(lead, 'first', 'Please list files.');
-    const second = await h.teammate(lead, 'second', 'Please list files.');
-    await h.idle(first, 1);
-    await h.idle(second, 1);
-    second.model.select(route('review') as never);
-    await h.unloadRouter();
-    assert.deepEqual(first.model.current(), route('strong'));
-    assert.deepEqual(second.model.current(), route('review'));
-    assert.equal(h.ctx.tools.get('team_route_status', lead), undefined);
-    assert.equal(h.ctx.tools.get('team_route_status', first), undefined);
-    await h.reloadRouter();
-    assert.equal(h.ctx.tools.definitions(lead).filter((tool) => tool.name === 'team_route_set').length, 1);
-    assert.equal(h.ctx.tools.definitions(first).filter((tool) => tool.name === 'team_route_status').length, 1);
-  });
-
-  it('persists member-ID overrides and original baseline across cold resume plus plugin reload', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const lead = await h.lead();
-    const original = await h.teammate(lead, 'worker', 'Ordinary work.');
-    await h.idle(original, 1);
-    await h.tool(lead, 'team_route_set', { member: 'worker', route: 'fast' });
-    await h.evict(original);
-    await h.idle(lead); // Native settlement may wake the parent before reload.
-    await h.unloadRouter();
-    await h.reloadRouter();
-    const targetId = await h.ctx.subagents.resolveName(lead, 'worker', h.signals.signal);
-    assert.equal(targetId, original.id);
-    assert.ok((await h.status(lead)).members.some((row) => row.id === original.id));
-    assert.equal(h.ctx.agents.get(original.id), undefined, 'Cold catalog/status reads must not resume an Agent');
-    await h.ctx.subagents.sendMessage(lead, targetId, text('Continue ordinary work.'), { signal: h.signals.signal });
-    const resumed = h.ctx.agents.get(original.id);
-    assert.ok(resumed);
-    assert.notEqual(resumed, original);
-    await h.idle(resumed, 2);
-    assert.equal(h.requests(resumed).at(-1)!.model, 'fast');
-    await h.tool(lead, 'team_route_reset', { member: 'worker' });
-    assert.deepEqual(resumed.model.current(), route('strong'), 'Must not mistake persisted routed model for original baseline');
-    assert.deepEqual(h.errors, []);
-  });
-
-  it('applies a cold manual override before validating an obsolete latched task route', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const lead = await h.lead();
-    const worker = await h.teammate(lead, 'worker', 'Ordinary work.');
-    await h.idle(worker, 1);
-    const task = await h.ctx.agentTeams.createTask(lead, { subject: 'List files', description: 'Inventory the workspace' });
-    await h.ctx.agentTeams.updateTask(lead, { taskId: task.id, expectedRevision: task.revision, action: 'reassign', owner: worker.id });
-    assert.equal(worker.model.current()!.model, 'fast');
-    await h.evict(worker);
+    t.after(dispose);
+    h.allowCompletion(oldChild); oldGate.release(); await oldEnded.promise;
+    // End publication precedes activation.result delivery; cross one event-loop turn
+    // for native result consumers, without polling or imposing a timing threshold.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    let records = (await h.status(lead)).executions;
+    assert.equal(records.length, 2);
+    assert.equal(records.find(row => row.id === oldRun.executionId)!.state, 'completed');
+    assert.equal(records.find(row => row.id === newRun.executionId)!.state, 'running');
+    h.allowCompletion(newChild); newGate.release(); await newEnded.promise;
+    await new Promise<void>(resolve => setImmediate(resolve));
     await h.idle(lead);
-    const models = h.adapter.listModels.bind(h.adapter);
-    h.adapter.listModels = async (provider) => (await models(provider)).filter((model) => model.id !== 'fast');
-    h.ctx.emit('llm/models-updated', 'offline');
-    await h.tool(lead, 'team_route_set', { member: 'worker', route: 'review' });
-    await h.unloadRouter();
-    await h.reloadRouter();
-    await h.ctx.subagents.sendMessage(lead, worker.id, text('Continue assigned work.'), { signal: h.signals.signal });
-    const resumed = h.ctx.agents.get(worker.id);
-    assert.ok(resumed);
-    await h.idle(resumed, 2);
-    assert.equal(h.requests(resumed).at(-1)!.model, 'review');
+    records = (await h.status(lead)).executions;
+    assert.equal(records.length, 2);
+    for (const record of records) { assert.equal(record.state, 'completed'); assert.equal(record.stopReason, 'completed'); }
+    assert.deepEqual(outcomes, [oldChild.id, newChild.id]);
+    assert.equal(h.ctx.agents.get(oldChild.id), undefined); assert.equal(h.ctx.agents.get(newChild.id), undefined);
+    const delivered = JSON.stringify(h.requests(lead));
+    assert.match(delivered, /old-generation/); assert.match(delivered, /new-generation/);
+    assert.match(delivered, /Offline completion/);
     assert.deepEqual(h.errors, []);
   });
 
-  it('keeps an existing task choice through live policy and task edits, then reads policy next turn', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
+  it('does not expose routing while Team mode is disabled', async (t) => {
+    const h = await NativeHarness.create({ policyV2: safePolicy() }, false); t.after(() => h.close());
     const lead = await h.lead();
-    const worker = await h.teammate(lead, 'worker', 'Ordinary work.');
-    await h.idle(worker, 1);
-    const task = await h.ctx.agentTeams.createTask(lead, { subject: 'List files', description: 'Inventory the workspace' });
-    const assigned = await h.ctx.agentTeams.updateTask(lead, { taskId: task.id, expectedRevision: task.revision, action: 'reassign', owner: worker.id });
-    assert.deepEqual(worker.model.current(), route('fast'));
-    const before = await h.status(lead);
-    const next = config();
-    next.routes.fast = route('review', 'high');
-    const fiber = h.routerFiber;
-    h.updatePolicy(next);
-    assert.equal(h.routerFiber, fiber, 'Policy updates retain the mounted router instance');
-    assert.deepEqual(worker.model.current(), route('fast'), 'A live policy edit is not a task boundary');
-    await h.ctx.agentTeams.updateTask(lead, {
-      taskId: task.id, expectedRevision: assigned.revision, action: 'edit',
-      subject: 'List amended files', description: 'Inventory the revised workspace',
-    });
-    assert.deepEqual(worker.model.current(), route('fast'), 'Editing the same owned task retains its choice');
-    const unrelated = await h.ctx.agentTeams.createTask(lead, { subject: 'Ordinary unrelated work', description: 'No ownership change' });
-    await h.ctx.agentTeams.updateTask(lead, {
-      taskId: unrelated.id, expectedRevision: unrelated.revision, action: 'edit', subject: 'Review unrelated work',
-    });
-    const latched = await h.status(lead);
-    assert.deepEqual(worker.model.current(), route('fast'), 'Unrelated task events cannot adopt a new policy mid-task');
-    assert.deepEqual(latched.history, before.history, 'Neither policy nor non-boundary task edits create routing decisions');
-    assert.equal(h.requests(worker).length, 1, 'Live policy and task edits do not wake the member');
-    await h.drive(worker, 'Continue the assigned task.', 2);
-    assert.equal(h.requests(worker).at(-1)!.model, 'review');
-    assert.equal(h.requests(worker).at(-1)!.reasoningEffort, 'high');
-    assert.deepEqual(worker.model.current(), route('review', 'high'));
-    assert.deepEqual(h.errors, []);
+    for (const name of ['team_route_delegate', 'team_route_status', 'team_route_cancel']) assert.equal(h.ctx.tools.get(name, lead), undefined);
+    const child = await h.teammate(lead, 'worker', 'Review files.'); await child.whenIdle();
+    assert.equal(h.requests(child)[0]!.model, 'strong');
   });
 
-  it('preserves an already admitted request across a live route edit and adopts it next turn', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
+  it('does not expose delegation to teammates and rejects cross-Agent tool callers', async (t) => {
+    const h = await NativeHarness.create(); t.after(() => h.close());
     const lead = await h.lead();
-    const worker = await h.teammate(lead, 'worker', 'Please list files.');
-    await h.idle(worker, 1);
-    const started = Promise.withResolvers<void>();
-    const released = Promise.withResolvers<void>();
-    t.after(() => released.resolve());
-    const resolveModel = h.adapter.resolveModel.bind(h.adapter);
-    let once = true;
-    h.adapter.resolveModel = async (provider, model, signal) => {
-      if (once) {
-        once = false;
-        assert.equal(model, 'fast');
-        started.resolve();
-        await released.promise;
-      }
-      return resolveModel(provider, model, signal);
-    };
-    const run = h.drive(worker, 'Please list files again.', 2);
-    await started.promise;
-    try {
-      const next = config();
-      next.routes.fast = route('review', 'high');
-      h.updatePolicy(next);
-      assert.deepEqual(worker.model.current(), route('fast'));
-      assert.equal(h.requests(worker).length, 1, 'The native step is admitted but transport has not started');
-    } finally { released.resolve(); }
-    await run;
-    assert.equal(h.requests(worker).at(-1)!.model, 'fast', 'An admitted request keeps its captured native model selection');
-    await h.drive(worker, 'Please list files on the next turn.', 3);
-    assert.equal(h.requests(worker).at(-1)!.model, 'review');
-    assert.equal(h.requests(worker).at(-1)!.reasoningEffort, 'high');
-    assert.deepEqual(h.errors, []);
+    const worker = await h.teammate(lead, 'worker', 'Ordinary work.'); await h.idle(worker, 1);
+    assert.equal(h.ctx.tools.get('team_route_delegate', worker), undefined);
+    assert.equal(h.ctx.tools.get('team_route_cancel', worker), undefined);
+    await assert.rejects(h.tool(lead, 'team_route_delegate', { category: 'quick', prompt: 'Do work', description: 'Work' }, worker), /caller|Lead/i);
+    assert.deepEqual((await h.status(lead)).executions, []);
   });
 
-  for (const change of ['changed', 'deleted'] as const) {
-    it(`rejects manual override when its live named route is ${change} during catalog validation`, async (t) => {
-      const h = await NativeHarness.create();
-      t.after(() => h.close());
-      const lead = await h.lead();
-      const worker = await h.teammate(lead, 'worker', 'Ordinary work.');
-      await h.idle(worker, 1);
-      const before = await h.status(lead);
-      const started = Promise.withResolvers<void>();
-      const released = Promise.withResolvers<void>();
-      t.after(() => released.resolve());
-      const listModels = h.adapter.listModels.bind(h.adapter);
-      let once = true;
-      h.adapter.listModels = async (provider) => {
-        if (once) {
-          once = false;
-          started.resolve();
-          await released.promise;
-        }
-        return listModels(provider);
-      };
-      h.ctx.emit('llm/models-updated', 'offline');
-      const rejected = assert.rejects(
-        h.tool(lead, 'team_route_set', { member: 'worker', route: 'fast' }),
-        /named route changed while validating/i,
-      );
-      await started.promise;
-      try {
-        const next = config();
-        if (change === 'changed') next.routes.fast = route('review', 'high');
-        else {
-          delete next.routes.fast;
-          next.rules = (next.rules ?? []).filter((rule) => rule.route !== 'fast');
-        }
-        h.updatePolicy(next);
-      } finally { released.resolve(); }
-      await rejected;
-      const after = await h.status(lead);
-      assert.equal(after.members.find((row) => row.id === worker.id)!.manualRoute, null, 'Rejected validation never commits an override');
-      assert.deepEqual(after.history, before.history);
-      assert.deepEqual(worker.model.current(), route('strong'));
-      assert.equal(h.requests(worker).length, 1);
-      assert.deepEqual(h.errors, []);
+  it('keeps legacy configs migration-required without applying old rules or roles', async (t) => {
+    const h = await NativeHarness.create(config()); t.after(() => h.close());
+    const lead = await h.lead();
+    assert.equal((await h.status(lead)).migrationRequired, true);
+    await assert.rejects(h.delegate(lead), /migration-required/);
+    const worker = await h.teammate(lead, 'reviewer', 'Please list inventory and audit.'); await h.idle(worker, 1);
+    assert.equal(h.requests(worker)[0]!.model, 'strong');
+    assert.deepEqual((await h.status(lead)).executions, []);
+  });
+
+  for (const name of ['team_route_set', 'team_route_reset']) {
+    it(`keeps ${name} retired without mutating a child`, async (t) => {
+      const h = await NativeHarness.create(); t.after(() => h.close());
+      const lead = await h.lead(); const child = await h.teammate(lead, 'worker', 'Ordinary work.'); await h.idle(child, 1);
+      await assert.rejects(h.tool(lead, name, { member: 'worker', route: 'fast' }), /retired/i);
+      assert.deepEqual(child.model.current(), route('strong'));
+      assert.deepEqual((await h.status(lead)).executions, []);
     });
   }
 
-  for (const phase of ['metadata-validation', 'downstream-guard'] as const) {
-    it(`vetoes stale captured routes when tasks change during ${phase}`, async (t) => {
-      const h = await NativeHarness.create();
-      t.after(() => h.close());
+  for (const executor of ['codex', 'agy', 'cursor'] as const) {
+    it(`fails closed for ${executor} without admission, fallback or external execution`, async (t) => {
+      const policy = safePolicy(); policy.defaultTarget = { executor, model: { mode: 'executor-default' } };
+      const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
       const lead = await h.lead();
-      const worker = await h.teammate(lead, 'worker', 'Please list files.');
-      await h.idle(worker, 1);
-      const started = Promise.withResolvers<void>();
-      const released = Promise.withResolvers<void>();
-      t.after(() => released.resolve());
-      if (phase === 'metadata-validation') {
-        const listModels = h.adapter.listModels.bind(h.adapter);
-        let once = true;
-        h.adapter.listModels = async (provider) => {
-          if (once) {
-            once = false;
-            started.resolve();
-            await released.promise;
-          }
-          return listModels(provider);
-        };
-        h.ctx.emit('llm/models-updated', 'offline');
-      } else {
-        let once = true;
-        h.ctx.on('agent/pre-step', async ({ agent }, next) => {
-          if (agent === worker && once) {
-            once = false;
-            started.resolve();
-            await released.promise;
-          }
-          return next();
-        });
-      }
-      worker.inbox.clear();
-      worker.followup(createUserMessage({ content: text('Please list files again.'), source: { kind: 'user' } }));
-      await started.promise;
-      try {
-        const task = await h.ctx.agentTeams.createTask(lead, { subject: 'Review security', description: 'Audit the change' });
-        await h.ctx.agentTeams.updateTask(lead, { taskId: task.id, expectedRevision: task.revision, action: 'reassign', owner: worker.id });
-        assert.equal(worker.model.current()!.model, 'review');
-      } finally { released.resolve(); }
-      await worker.whenIdle();
-      assert.equal(h.requests(worker).length, 1, 'Stale fast request must never reach adapter dispatch');
-      assert.ok(h.errors.some((entry) => entry.agent === worker && /route changed during step preparation/i.test(String(entry.error))));
-      h.errors.length = 0;
-      await h.drive(worker, 'Explicitly continue the assigned task.', 2);
-      assert.equal(h.requests(worker).at(-1)!.model, 'review');
+      await assert.rejects(h.delegate(lead), /not enabled/i);
+      assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
+      assert.deepEqual((await h.status(lead)).executions, []);
     });
   }
 
-  it('preserves an admitted step route when a task changes during native prepareCall', async (t) => {
-    const h = await NativeHarness.create();
-    t.after(() => h.close());
-    const lead = await h.lead();
-    const worker = await h.teammate(lead, 'worker', 'Please list files.');
-    await h.idle(worker, 1);
-    const started = Promise.withResolvers<void>();
-    const released = Promise.withResolvers<void>();
-    t.after(() => released.resolve());
-    const resolveModel = h.adapter.resolveModel.bind(h.adapter);
-    let once = true;
-    h.adapter.resolveModel = async (provider, model, signal) => {
-      if (once) {
-        once = false;
-        started.resolve();
-        await released.promise;
-      }
-      return resolveModel(provider, model, signal);
-    };
-    const run = h.drive(worker, 'Please list files again.', 2);
-    await started.promise;
-    try {
-      const task = await h.ctx.agentTeams.createTask(lead, { subject: 'Review security', description: 'Audit the change' });
-      await h.ctx.agentTeams.updateTask(lead, { taskId: task.id, expectedRevision: task.revision, action: 'reassign', owner: worker.id });
-      assert.equal(worker.model.current()!.model, 'review');
-    } finally { released.resolve(); }
-    await run;
-    assert.equal(h.requests(worker).at(-1)!.model, 'fast', 'Admitted native step is immutable, even before transport starts');
-    await h.drive(worker, 'Continue the assigned task.', 3);
-    assert.equal(h.requests(worker).at(-1)!.model, 'review');
-    assert.deepEqual(h.errors, []);
-  });
-
-  for (const bad of [
-    { provider: 'not-registered', model: 'fast' },
-    { provider: 'offline', model: 'not-advertised' },
-    { provider: 'offline', model: 'fast', reasoningEffort: 'not-supported' },
+  for (const target of [
+    { executor: 'native' as const, model: { mode: 'explicit' as const, provider: 'missing-provider', id: 'fast' } },
+    explicitTarget('missing-model'),
+    explicitTarget('fast', 'unsupported-effort'),
   ]) {
-    it(`refuses invalid route before any adapter dispatch: ${JSON.stringify(bad)}`, async (t) => {
-      const policy = config();
-      policy.routes.bad = bad;
-      policy.roles = { worker: 'bad' };
-      const h = await NativeHarness.create(policy);
-      t.after(() => h.close());
+    it(`rejects invalid advertised route ${JSON.stringify(target)} before child creation`, async (t) => {
+      const policy = safePolicy(); policy.defaultTarget = target;
+      const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
       const lead = await h.lead();
-      const worker = await h.teammate(lead, 'worker', 'Ordinary work.');
-      await worker.whenIdle();
-      assert.equal(h.adapter.requests.length, 0);
-      assert.ok(h.errors.some((entry) => entry.agent === worker), 'Awaited pre-step must reject the invalid route');
-      assert.deepEqual(lead.model.current(), route('strong'));
+      assert.equal(target.model.mode, 'explicit');
+      const model = target.model as { provider: string; id: string };
+      lead.session.append('subagent/model-selection-policy', { allowedModels: [{ provider: model.provider, model: model.id }] });
+      await assert.rejects(h.delegate(lead));
+      assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
+      assert.deepEqual((await h.status(lead)).executions, []);
     });
   }
+
+  it('refuses a policy changed during async model preflight instead of submitting a stale snapshot', async (t) => {
+    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const lead = await h.lead(); h.authorize(lead);
+    const started = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+    t.after(() => release.resolve());
+    const listModels = h.adapter.listModels.bind(h.adapter);
+    let once = true;
+    h.adapter.listModels = async provider => {
+      if (once) { once = false; started.resolve(); await release.promise; }
+      return listModels(provider);
+    };
+    h.ctx.emit('llm/models-updated', 'offline');
+    const rejected = assert.rejects(h.delegate(lead, 'quick'), /changed before submission/i);
+    await started.promise;
+    try { h.updatePolicy({ policyV2: safePolicy() }); } finally { release.resolve(); }
+    await rejected;
+    assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
+    assert.deepEqual((await h.status(lead)).executions, []);
+  });
+
+  it('still disposes a real native child when cancellation audit writes fail', async (t) => {
+    const h = await NativeHarness.create(); t.after(() => h.close());
+    const lead = await h.lead(); const gate = h.adapter.holdNextRequest(); t.after(() => gate.release());
+    const result = await h.delegate(lead); await gate.started;
+    const child = await h.child(lead, result.executionId);
+    const ended: string[] = [];
+    const unsubscribe = h.ctx.on('subagent/end', info => {
+      if (info.id === child.id) ended.push(info.stopReason);
+    });
+    t.after(unsubscribe);
+    // Fault injection is confined to persistence; cancellation and managed teardown
+    // still run through the real native activation, not a mocked dispose method.
+    const update = t.mock.method(ExecutionStore.prototype, 'update', () => { throw new Error('Injected ENOSPC audit failure'); });
+    try {
+      const cancelled = await h.cancel(lead, result.executionId);
+      assert.ok(update.mock.callCount() >= 1, 'Cancellation attempted to persist its audit transition');
+      assert.equal(cancelled.stopped, true); assert.equal(cancelled.sideEffectsRolledBack, false);
+      assert.equal(h.ctx.agents.get(child.id), undefined);
+      assert.equal(h.teams.liveMembers(lead).some(row => row.id === child.id), false);
+      assert.deepEqual(ended, ['aborted'], 'Native lifecycle confirms cleanup despite persistence failure');
+    } finally { update.mock.restore(); }
+    // A failed audit write must not be confused with durable cancelled evidence.
+    assert.equal((await h.status(lead)).executions[0]!.state, 'running');
+  });
+
+  it('records uncertain startup as unknown when rejection follows real native admission', async (t) => {
+    const h = await NativeHarness.create(); t.after(() => h.close());
+    const lead = await h.lead(); const gate = h.adapter.holdNextRequest(); t.after(() => gate.release());
+    const start = h.ctx.subagents.startActivation.bind(h.ctx.subagents);
+    let admitted: SubagentActivation | undefined;
+    // Models the caller-visible ambiguity, not a claim that native admission is
+    // side-effect-free: the real child is accepted before this boundary rejects.
+    const startup = t.mock.method(h.ctx.subagents, 'startActivation', async (...args: Parameters<typeof start>) => {
+      admitted = await start(...args);
+      throw new Error('Injected rejection after native admission');
+    });
+    try {
+      await assert.rejects(h.delegate(lead), /rejection after native admission/);
+      await gate.started;
+      assert.ok(admitted);
+      const record = (await h.status(lead)).executions[0]!;
+      assert.equal(record.state, 'unknown');
+      assert.match(record.diagnostic ?? '', /uncertain|unconfirmed/i);
+      assert.match(record.diagnostic ?? '', /no automatic replay/i);
+      assert.equal(startup.mock.callCount(), 1, 'Startup rejection must not replay the task');
+      assert.ok(h.ctx.agents.get(admitted.childId), 'Ambiguous startup can leave a real admitted child; do not assert zero side effects');
+    } finally {
+      startup.mock.restore();
+      await admitted?.dispose();
+    }
+  });
+
+  it('cancels a managed running execution and never claims to roll back side effects', async (t) => {
+    const h = await NativeHarness.create(); t.after(() => h.close());
+    const lead = await h.lead(); const gate = h.adapter.holdNextRequest();
+    const result = await h.delegate(lead);
+    await gate.started;
+    const worker = await h.child(lead, result.executionId);
+    assert.equal((await h.status(lead)).executions[0]!.state, 'running');
+    const other = await h.lead('other');
+    await assert.rejects(h.cancel(other, result.executionId), /No active/i);
+    const cancelled = await h.cancel(lead, result.executionId);
+    assert.equal(cancelled.stopped, true); assert.equal(cancelled.sideEffectsRolledBack, false);
+    assert.equal(h.ctx.agents.get(worker.id), undefined);
+    assert.equal(h.teams.liveMembers(lead).some(row => row.id === worker.id), false);
+    const record = (await h.status(lead)).executions[0]!;
+    assert.equal(record.state, 'cancelled'); assert.equal(record.stopReason, 'aborted');
+    await assert.rejects(h.cancel(lead, result.executionId), /No active/i);
+  });
 });

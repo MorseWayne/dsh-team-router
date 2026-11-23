@@ -1,8 +1,10 @@
 import type { Context } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
 import type { NormalizedConfig } from './policy.ts';
-/** Flat v0.1 configuration stays compatible; stateDir remains restart-only. */
+import type { RoutingPolicyV2 } from './routing-policy.ts';
+/** Legacy fields remain readable for migration only; V2 is one atomic volatile value. */
 export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
+    policyV2: Schema<any, any, "volatile">;
     routes: Schema<NoInfer<import("@deepseek-ai/cosmokit").Dict<{
         provider?: string | null;
         model?: string | null;
@@ -28,6 +30,7 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     historyLimit: Schema<number, number, "volatile-defined">;
     stateDir: Schema<string, string, "plain">;
 }>>, Schemastery.ObjectT<NoInfer<{
+    policyV2: Schema<any, any, "volatile">;
     routes: Schema<NoInfer<import("@deepseek-ai/cosmokit").Dict<{
         provider?: string | null;
         model?: string | null;
@@ -57,9 +60,14 @@ export type Config = ReturnType<typeof Config>;
 /** Read each current reference once and return a fully detached, validated policy. */
 export declare function readPolicy(config: Config): NormalizedConfig;
 export declare const resolvePolicy: typeof readPolicy;
+export declare function readRoutingState(config: Config): {
+    policy: RoutingPolicyV2;
+    migrationRequired: boolean;
+};
+export declare function requireRoutingPolicy(config: Config): RoutingPolicyV2;
 /**
  * Validate the complete candidate before native ConfigEditor persists it.
  * Keep Config an object schema so Settings can project its volatile fields.
  * Call readPolicy during activation as well: this hook protects later edits.
  */
-export declare function installConfigValidation(ctx: Context): void;
+export declare function installConfigValidation(ctx: Context, beforeMigration?: (legacy: NormalizedConfig) => void): void;

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,9 @@ import { boot, readProfilePatches } from '@deepseek-ai/dsh-app-boot';
 import type { ProfileContext } from '@deepseek-ai/dsh-app-boot';
 import { ConfigEditor } from '@deepseek-ai/dsh-config-editor';
 import { SettingsConflictError, SettingsForms } from '@deepseek-ai/dsh-settings';
-import { Config, installConfigValidation, readPolicy } from '../src/config.ts';
+import { Config, installConfigValidation, readPolicy, readRoutingState } from '../src/config.ts';
+import { createDefaultRoutingPolicy } from '../src/routing-policy.ts';
+import { ExecutionStore } from '../src/execution-store.ts';
 
 const namespace = 'team-router-policy-test';
 const model = (id: string) => ({ provider: 'offline', model: id });
@@ -20,8 +22,9 @@ const probe = {
   name: 'team-router-policy-test',
   Config,
   apply(ctx: Context, config: Config) {
-    readPolicy(config);
-    installConfigValidation(ctx);
+    readRoutingState(config);
+    const store = new ExecutionStore(config.stateDir!);
+    installConfigValidation(ctx, legacy => { store.backupLegacy(legacy); });
   },
 };
 
@@ -108,6 +111,35 @@ async function settingsFixture(t: TestContext, inheritFromBase = false) {
 }
 
 describe('native settings profile persistence and CAS', { concurrency: false, timeout: 30_000 }, () => {
+  it('atomically saves V2 over inherited legacy config with backup, live references, CAS and restart persistence', async t => {
+    const h = await settingsFixture(t, true);
+    const fiber = h.entry().fiber!;
+    const config = fiber.effectiveConfig as Config;
+    const ref = config.policyV2;
+    const revision = h.descriptor().revision;
+    const legacy = readPolicy(config);
+    assert.equal(readRoutingState(config).migrationRequired, true);
+    const policy = createDefaultRoutingPolicy();
+    policy.categories.quick = { mode: 'target', target: { executor: 'native', model: { mode: 'explicit', provider: 'offline', id: 'review' } } };
+    await h.ctx().settings.mutate(namespace, [{ op: 'set', path: ['policyV2'], value: policy }], revision);
+    assert.equal(h.entry().fiber, fiber);
+    assert.equal(config.policyV2, ref);
+    assert.equal(readRoutingState(config).migrationRequired, false);
+    assert.deepEqual(readRoutingState(config).policy, policy);
+    assert.deepEqual(readPolicy(config), legacy, 'Legacy composition data is retained only for rollback, not run by V2');
+    const backups = await readdir(join(h.stateDir, 'migrations'));
+    assert.equal(backups.length, 1);
+    assert.deepEqual(JSON.parse(await readFile(join(h.stateDir, 'migrations', backups[0]!), 'utf8')).legacy, JSON.parse(JSON.stringify(legacy)));
+    const bytes = await readFile(h.patchPath);
+    await assert.rejects(h.ctx().settings.mutate(namespace, [{ op: 'set', path: ['policyV2'], value: createDefaultRoutingPolicy() }], revision), SettingsConflictError);
+    await assert.rejects(h.ctx().settings.mutate(namespace, [{ op: 'set', path: ['policyV2'], value: { version: 2, categories: { 'deep-high': { mode: 'default' } } } }], h.descriptor().revision));
+    assert.deepEqual(await readFile(h.patchPath), bytes);
+    assert.equal(config.stateDir, h.stateDir);
+    assert.deepEqual(config.unknownStatic, h.staticValue);
+    await h.stop(); await h.start();
+    assert.deepEqual(readRoutingState(h.entry().fiber!.effectiveConfig as Config).policy, policy);
+    assert.equal((await readdir(join(h.stateDir, 'migrations'))).length, 1);
+  });
   it('distinguishes explicit no-default from restoring the composition default', async (t) => {
     const h = await settingsFixture(t, true);
     const config = () => h.entry().fiber!.effectiveConfig as Config;

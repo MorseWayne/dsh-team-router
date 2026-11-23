@@ -1,36 +1,34 @@
 import type { Context } from '@deepseek-ai/cordis';
 import { NativeTeams } from './native-team.ts';
 import { Config } from './config.ts';
+import { ExecutionStore } from './execution-store.ts';
 export { Config } from './config.ts';
-import type { NormalizedConfig } from './policy.ts';
-import { StateStore } from './store.ts';
 export declare const name = "team-router";
 export declare const inject: string[];
-/** Exposed for offline verification; mount through apply() in a real Host. */
+/** P0 gates are intentional: installed CLI/LLM adapters are not necessarily safe
+ * out-of-process Agent backends. Do not silently downgrade to a raw shell command.
+ */
+export declare const EXTERNAL_GATES: Readonly<{
+    codex: "Codex task execution is not enabled: the dedicated runtime, permission roots and recursive-agent limits have not passed integration verification.";
+    agy: "Antigravity task execution is not enabled: explicit permissions, no-replay behavior, managed cancellation and recursive-agent limits have not been verified.";
+    cursor: "Cursor task execution is not enabled: the Agent backend, permission boundary, cancellation and recursive-agent limits have not been verified.";
+}>;
 export declare class TeamRouter {
-    readonly store: StateStore;
     readonly teams: NativeTeams;
-    private readonly configuration;
-    get policy(): NormalizedConfig;
-    private readonly states;
-    private readonly runtimes;
-    private readonly validated;
+    readonly store: ExecutionStore;
+    private readonly registrations;
+    private readonly active;
+    private authorization;
     private stopped;
     private readonly ctx;
-    constructor(ctx: Context, config: Config);
-    private state;
-    private commit;
+    private readonly configuration;
+    constructor(ctx: Context, configuration: Config);
     private caller;
-    /** A bounded metadata check, not a provider health, quota, or billing probe. */
-    private validate;
-    /** Select future steps at creation, first turn claim, task edges, or idle overrides; never rewrite an admitted step. */
-    private refresh;
-    private safeRefresh;
-    private status;
-    private tools;
+    private preflight;
+    private delegate;
     private install;
-    start(): Promise<void>;
     private release;
+    start(): Promise<void>;
     stop(): void;
 }
 export declare function apply(ctx: Context, config: Config): Promise<void>;

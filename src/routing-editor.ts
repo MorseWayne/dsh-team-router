@@ -1,0 +1,276 @@
+import { CATEGORY_IDS } from './categories.ts';
+import type { CategoryId } from './categories.ts';
+import { previewMigration } from './migration.ts';
+import type { MigrationPreview } from './migration.ts';
+import { parseRoutingPolicy } from './routing-policy.ts';
+import type { CategoryBinding, RoutingPolicyV2, Target } from './routing-policy.ts';
+import type { RouterConfig } from './policy.ts';
+import { routingPolicyFingerprint } from './recommendations.ts';
+import type { ModelCatalog, RecommendationPreview } from './recommendations.ts';
+
+export interface RoutingFormValue {
+  policyV2?: RoutingPolicyV2 | null;
+  routes?: RouterConfig['routes'];
+  rules?: RouterConfig['rules'];
+  roles?: RouterConfig['roles'];
+  defaultRoute?: string | null;
+  historyLimit?: number;
+}
+export interface RoutingFormSnapshot {
+  status: 'loading' | 'ready' | 'unavailable';
+  value: RoutingFormValue | undefined;
+  revision: number | undefined;
+  writable: boolean;
+}
+export interface RoutingMutation { op: 'set'; path: ['policyV2']; value: RoutingPolicyV2 }
+export interface RoutingForm {
+  getSnapshot(): RoutingFormSnapshot;
+  subscribe(listener: () => void): () => void;
+  mutate(ops: readonly RoutingMutation[], expectedRevision?: number): Promise<boolean>;
+}
+export interface RoutingDraft {
+  defaultTarget: Target;
+  categories: Record<CategoryId, CategoryBinding>;
+  historyLimit: string;
+}
+export type RoutingSection = CategoryId | 'default';
+export type RoutingField = 'executor' | 'provider' | 'model' | 'effort' | 'historyLimit';
+export type RoutingIssueReason = 'required' | 'history' | 'catalog' | 'catalogRequired' | 'externalUnavailable' | 'structure';
+export interface RoutingValidationIssue { section: RoutingSection; field: RoutingField; reason: RoutingIssueReason; detail?: string }
+export type RoutingEditorError = { kind: 'validation' | 'refused' | 'transport' | 'migration' | 'previewChanged'; detail: string };
+export interface RoutingEditorSnapshot {
+  draft: RoutingDraft | undefined;
+  revision: number | undefined;
+  dirty: boolean;
+  saving: boolean;
+  stale: boolean;
+  migrationRequired: boolean;
+  migrationConfirmed: boolean;
+  retired: MigrationPreview['retired'] | undefined;
+  issue: RoutingValidationIssue | undefined;
+  error: RoutingEditorError | undefined;
+  notice: 'saved' | undefined;
+}
+
+export function routingPolicyToDraft(input: unknown): RoutingDraft {
+  const policy = parseRoutingPolicy(input);
+  const categories = Object.create(null) as Record<CategoryId, CategoryBinding>;
+  for (const id of CATEGORY_IDS) categories[id] = policy.categories[id] ?? { mode: 'default' };
+  return { defaultTarget: policy.defaultTarget, categories, historyLimit: String(policy.historyLimit) };
+}
+export function routingDraftToPolicy(draft: RoutingDraft): RoutingPolicyV2 {
+  return parseRoutingPolicy({
+    version: 2, defaultTarget: draft.defaultTarget, categories: draft.categories,
+    historyLimit: draft.historyLimit.trim() === '' ? NaN : Number(draft.historyLimit),
+  });
+}
+
+/** Select legacy fields explicitly; stateDir and future Host fields are not policy inputs. */
+export function routingFormPreview(value: RoutingFormValue): {
+  policy: RoutingPolicyV2; required: boolean; retired: MigrationPreview['retired'] | undefined;
+} {
+  if (value.policyV2 !== undefined) {
+    return { policy: parseRoutingPolicy(value.policyV2), required: false, retired: undefined };
+  }
+  const preview = previewMigration({
+    routes: value.routes ?? {},
+    ...(value.rules === undefined ? {} : { rules: value.rules }),
+    ...(value.roles === undefined ? {} : { roles: value.roles }),
+    ...(value.defaultRoute == null ? {} : { defaultRoute: value.defaultRoute }),
+    ...(value.historyLimit === undefined ? {} : { historyLimit: value.historyLimit }),
+  });
+  return { policy: preview.policy, required: preview.required, retired: preview.retired };
+}
+
+/** No unset operation exists: clearing V2 would revive legacy composition fields. */
+export function routingPolicyMutations(input: unknown): RoutingMutation[] {
+  return [{ op: 'set', path: ['policyV2'], value: parseRoutingPolicy(input) }];
+}
+
+export function routingDraftIssue(
+  draft: RoutingDraft,
+  catalog?: ModelCatalog,
+  catalogReady = catalog !== undefined,
+): RoutingValidationIssue | undefined {
+  const history = Number(draft.historyLimit);
+  if (draft.historyLimit.trim() === '' || !Number.isInteger(history) || history < 1 || history > 1000) {
+    return { section: 'default', field: 'historyLimit', reason: 'history' };
+  }
+  const targets: Array<{ section: RoutingSection; target: Target }> = [{ section: 'default', target: draft.defaultTarget }];
+  for (const id of CATEGORY_IDS) {
+    const entry = draft.categories[id];
+    if (entry?.mode === 'target') targets.push({ section: id, target: entry.target });
+  }
+  for (const { section, target } of targets) {
+    if (target.executor !== 'native') return { section, field: 'executor', reason: 'externalUnavailable' };
+    const selected = target.model;
+    if (selected.mode === 'inherit') continue;
+    if (!selected.provider.trim()) return { section, field: 'provider', reason: 'required' };
+    if (!selected.id.trim()) return { section, field: 'model', reason: 'required' };
+    if (!catalogReady || !catalog) return { section, field: 'model', reason: 'catalogRequired' };
+    const group = catalog.groups.find((entry) => entry.id === selected.provider.trim());
+    if (!group || catalog.failures.some((failure) => failure.id === group.id)) {
+      return { section, field: 'provider', reason: 'catalog' };
+    }
+    const model = group.models.find((entry) => entry.id === selected.id.trim());
+    if (!model) return { section, field: 'model', reason: 'catalog' };
+    if (selected.reasoningEffort !== undefined && !model.reasoning?.efforts.some((effort) => effort.id === selected.reasoningEffort?.trim())) {
+      return { section, field: 'effort', reason: 'catalog' };
+    }
+  }
+  try { routingDraftToPolicy(draft); }
+  catch (error) {
+    return { section: 'default', field: 'executor', reason: 'structure', detail: error instanceof Error ? error.message : String(error) };
+  }
+  return undefined;
+}
+
+/** Staged, revision-bound V2 editor. Migration, preview application, and save are explicit actions. */
+export class RoutingEditor {
+  private state: RoutingEditorSnapshot = {
+    draft: undefined, revision: undefined, dirty: false, saving: false, stale: false,
+    migrationRequired: false, migrationConfirmed: false, retired: undefined,
+    issue: undefined, error: undefined, notice: undefined,
+  };
+  private listeners = new Set<() => void>();
+  private readonly customTargets = new Map<CategoryId, Target>();
+  private readonly nativeModels = new Map<RoutingSection, Extract<Target, { executor: 'native' }>>();
+  private readonly stop: () => void;
+  private disposed = false;
+  private readonly form: RoutingForm;
+  constructor(form: RoutingForm) {
+    this.form = form;
+    this.accept();
+    this.stop = form.subscribe(() => {
+      if (this.state.saving) return;
+      if (!this.state.dirty) this.accept();
+      else {
+        const stale = form.getSnapshot().revision !== this.state.revision;
+        this.publish({ ...this.state, stale, migrationConfirmed: stale ? false : this.state.migrationConfirmed });
+      }
+    });
+  }
+  readonly getSnapshot = (): RoutingEditorSnapshot => this.state;
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.listeners.add(listener); return () => { this.listeners.delete(listener); };
+  };
+  dispose(): void { this.disposed = true; this.stop(); this.listeners.clear(); }
+  private publish(state: RoutingEditorSnapshot): void {
+    if (this.disposed) return;
+    this.state = state;
+    for (const listener of this.listeners) listener();
+  }
+  private remember(draft: RoutingDraft, reset = false): void {
+    if (reset) { this.customTargets.clear(); this.nativeModels.clear(); }
+    const targets: Array<[RoutingSection, Target]> = [['default', draft.defaultTarget]];
+    for (const id of CATEGORY_IDS) {
+      const binding = draft.categories[id];
+      if (binding.mode === 'target') {
+        this.customTargets.set(id, structuredClone(binding.target));
+        targets.push([id, binding.target]);
+      }
+    }
+    for (const [section, target] of targets) {
+      if (target.executor === 'native' && target.model.mode === 'explicit') this.nativeModels.set(section, structuredClone(target));
+    }
+  }
+  private accept(notice?: 'saved'): void {
+    const host = this.form.getSnapshot();
+    try {
+      const value = host.value === undefined ? undefined : routingFormPreview(host.value);
+      const draft = value === undefined ? undefined : routingPolicyToDraft(value.policy);
+      this.customTargets.clear(); this.nativeModels.clear();
+      if (draft) this.remember(draft, true);
+      this.publish({
+        draft, revision: host.revision,
+        dirty: false, saving: false, stale: false, migrationRequired: value?.required ?? false,
+        migrationConfirmed: false, retired: value?.retired, issue: undefined, error: undefined, notice,
+      });
+    } catch (error) {
+      this.publish({ ...this.state, draft: undefined, revision: host.revision, dirty: false, saving: false,
+        stale: false, migrationRequired: false, migrationConfirmed: false, retired: undefined,
+        issue: undefined, error: { kind: 'validation', detail: error instanceof Error ? error.message : String(error) }, notice: undefined });
+    }
+  }
+  edit(draft: RoutingDraft, revision = this.state.revision): void {
+    const host = this.form.getSnapshot();
+    if (this.disposed || this.state.saving || host.status !== 'ready' || !host.writable) return;
+    const stale = host.revision !== revision;
+    this.remember(draft);
+    this.publish({ ...this.state, draft: structuredClone(draft), revision, dirty: true, stale,
+      migrationConfirmed: stale ? false : this.state.migrationConfirmed, issue: undefined, error: undefined, notice: undefined });
+  }
+  /** Preserve dormant custom choices within this edit session, but never persist them in default bindings. */
+  setCategoryMode(category: CategoryId, mode: 'default' | 'target', revision = this.state.revision): void {
+    const draft = this.state.draft;
+    if (!draft || !CATEGORY_IDS.some(id => id === category)) return;
+    const target = this.customTargets.get(category) ?? { executor: 'native' as const, model: { mode: 'inherit' as const } };
+    this.edit({ ...draft, categories: { ...draft.categories, [category]: mode === 'default' ? { mode } : { mode, target } } }, revision);
+  }
+  /** Returning from inheritance restores the last explicit native choice until save/reload. */
+  setNativeModelMode(section: RoutingSection, mode: 'inherit' | 'explicit', revision = this.state.revision): void {
+    const draft = this.state.draft;
+    if (!draft) return;
+    const target: Target = mode === 'inherit' ? { executor: 'native', model: { mode: 'inherit' } }
+      : this.nativeModels.get(section) ?? { executor: 'native', model: { mode: 'explicit', provider: '', id: '' } };
+    this.edit(section === 'default' ? { ...draft, defaultTarget: target }
+      : { ...draft, categories: { ...draft.categories, [section]: { mode: 'target', target } } }, revision);
+  }
+  discard(): void { if (!this.disposed && !this.state.saving) this.accept(); }
+  confirmMigration(revision = this.state.revision): boolean {
+    const host = this.form.getSnapshot();
+    if (this.disposed || this.state.saving || !this.state.migrationRequired || host.status !== 'ready' || !host.writable
+      || revision === undefined || revision !== this.state.revision || revision !== host.revision) return false;
+    this.publish({ ...this.state, migrationConfirmed: true, dirty: true, error: undefined, notice: undefined });
+    return true;
+  }
+  applyRecommendations(preview: RecommendationPreview, revision = this.state.revision): boolean {
+    const host = this.form.getSnapshot();
+    if (this.disposed || this.state.saving || !this.state.draft || host.status !== 'ready' || !host.writable) return false;
+    try {
+      if (revision === undefined || revision !== host.revision || revision !== this.state.revision
+        || preview.baselineFingerprint !== routingPolicyFingerprint(routingDraftToPolicy(this.state.draft))) {
+        this.publish({ ...this.state, error: { kind: 'previewChanged', detail: '' } });
+        return false;
+      }
+      this.edit(routingPolicyToDraft(preview.policy), revision);
+      return true;
+    } catch (error) {
+      this.publish({ ...this.state, error: { kind: 'validation', detail: error instanceof Error ? error.message : String(error) } });
+      return false;
+    }
+  }
+  async save(options: { catalog?: ModelCatalog; catalogReady?: boolean } = {}): Promise<boolean> {
+    const state = this.state;
+    const host = this.form.getSnapshot();
+    if (this.disposed || state.saving || !state.dirty || !state.draft || state.revision === undefined
+      || host.status !== 'ready' || !host.writable) return false;
+    if (state.stale || host.revision !== state.revision) {
+      this.publish({ ...state, stale: true, migrationConfirmed: false, error: { kind: 'refused', detail: '' } });
+      return false;
+    }
+    if (state.migrationRequired && !state.migrationConfirmed) {
+      this.publish({ ...state, error: { kind: 'migration', detail: '' } }); return false;
+    }
+    const issue = routingDraftIssue(state.draft, options.catalog, options.catalogReady ?? options.catalog !== undefined);
+    if (issue) { this.publish({ ...state, issue, error: undefined, notice: undefined }); return false; }
+    let mutations: RoutingMutation[];
+    try { mutations = routingPolicyMutations(routingDraftToPolicy(state.draft)); }
+    catch (error) {
+      this.publish({ ...state, error: { kind: 'validation', detail: error instanceof Error ? error.message : String(error) } });
+      return false;
+    }
+    this.publish({ ...state, saving: true, issue: undefined, error: undefined, notice: undefined });
+    try {
+      const accepted = await this.form.mutate(mutations, state.revision);
+      if (accepted) this.accept('saved');
+      else this.publish({ ...state, saving: false, stale: this.form.getSnapshot().revision !== state.revision,
+        error: { kind: 'refused', detail: '' }, notice: undefined });
+      return accepted;
+    } catch (error) {
+      this.publish({ ...state, saving: false, stale: this.form.getSnapshot().revision !== state.revision,
+        error: { kind: 'transport', detail: error instanceof Error ? error.message : String(error) }, notice: undefined });
+      return false;
+    }
+  }
+}
