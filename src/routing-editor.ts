@@ -208,11 +208,15 @@ export class RoutingEditor {
     this.edit({ ...draft, categories: { ...draft.categories, [category]: mode === 'default' ? { mode } : { mode, target } } }, revision);
   }
   /** Returning from inheritance restores the last explicit native choice until save/reload. */
-  setNativeModelMode(section: RoutingSection, mode: 'inherit' | 'explicit', revision = this.state.revision): void {
+  setNativeModelMode(section: RoutingSection, mode: 'inherit' | 'explicit', revision = this.state.revision, choice?: { provider: string; id: string }): void {
     const draft = this.state.draft;
     if (!draft) return;
+    const previous = this.nativeModels.get(section);
+    const matches = previous?.executor === 'native' && previous.model.mode === 'explicit'
+      && previous.model.provider === choice?.provider && previous.model.id === choice?.id;
     const target: Target = mode === 'inherit' ? { executor: 'native', model: { mode: 'inherit' } }
-      : this.nativeModels.get(section) ?? { executor: 'native', model: { mode: 'explicit', provider: '', id: '' } };
+      : choice && !matches ? { executor: 'native', model: { mode: 'explicit', ...choice } }
+      : previous ?? { executor: 'native', model: { mode: 'explicit', provider: '', id: '' } };
     this.edit(section === 'default' ? { ...draft, defaultTarget: target }
       : { ...draft, categories: { ...draft.categories, [section]: { mode: 'target', target } } }, revision);
   }

@@ -142,6 +142,23 @@ describe('routing form and draft helpers', () => {
 });
 
 describe('revision-bound V2 editor', () => {
+  it('selects a provider/model pair in one edit and does not carry effort between providers with the same model ID', async () => {
+    const policy = createDefaultRoutingPolicy();
+    policy.defaultTarget = { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini', reasoningEffort: 'low' } };
+    const form = new FakeForm({ policyV2: policy });
+    const editor = new RoutingEditor(form);
+    editor.setNativeModelMode('default', 'inherit');
+    editor.setNativeModelMode('default', 'explicit', 1, { provider: 'openai', id: 'gpt-5-mini' });
+    assert.deepEqual(editor.getSnapshot().draft?.defaultTarget, policy.defaultTarget);
+    const choice = { provider: 'alternate', id: 'gpt-5-mini' };
+    editor.setNativeModelMode('default', 'explicit', 1, choice);
+    const expected = { executor: 'native', model: { mode: 'explicit', ...choice } };
+    assert.deepEqual(editor.getSnapshot().draft?.defaultTarget, expected);
+    assert.equal(form.writes.length, 0);
+    assert.equal(await editor.save({ catalog: { groups: [...available.groups, { id: 'alternate', name: 'Alternate', models: [{ id: choice.id, name: 'Mini' }] }], failures: [] } }), true);
+    assert.deepEqual(form.state.value?.policyV2?.defaultTarget, expected);
+    editor.dispose();
+  });
   it('keeps bundle-detail and Settings drafts local while sharing only saved Host policy', async () => {
     const form = new FakeForm();
     const detail = new RoutingEditor(form);

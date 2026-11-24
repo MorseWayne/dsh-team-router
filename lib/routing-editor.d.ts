@@ -89,7 +89,10 @@ export declare class RoutingEditor {
     /** Preserve dormant custom choices within this edit session, but never persist them in default bindings. */
     setCategoryMode(category: CategoryId, mode: 'default' | 'target', revision?: number | undefined): void;
     /** Returning from inheritance restores the last explicit native choice until save/reload. */
-    setNativeModelMode(section: RoutingSection, mode: 'inherit' | 'explicit', revision?: number | undefined): void;
+    setNativeModelMode(section: RoutingSection, mode: 'inherit' | 'explicit', revision?: number | undefined, choice?: {
+        provider: string;
+        id: string;
+    }): void;
     discard(): void;
     confirmMigration(revision?: number | undefined): boolean;
     applyRecommendations(preview: RecommendationPreview, revision?: number | undefined): boolean;

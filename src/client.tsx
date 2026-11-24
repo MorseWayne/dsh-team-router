@@ -19,6 +19,7 @@ const en = {
   switchingHint: 'Default/inherited modes deactivate explicit selections. Switching back restores them within this edit session; saving or reloading keeps only the selected mode.',
   executor: 'Executor', native: 'DSH native teammate', externalBlocked: 'P0 integration is not verified. External execution is unavailable; existing values are preserved, not proof of installation or authentication.',
   modelMode: 'Model selection', inherit: 'Inherit the session model', explicit: 'Choose a model', executorDefault: 'Use the external agent’s default',
+  searchModels: 'Search models', noModels: 'No matching models',
   provider: 'Provider', model: 'Model', effort: 'Reasoning effort', modelDefault: 'Model default', chooseProvider: 'Choose a provider', chooseModel: 'Choose a model',
   unavailableOption: '{name} (not available in this catalog)', configured: 'Configured target: {target}',
   loading: 'Loading Host configuration…', unavailable: 'The team-router configuration is not served by this Host.', readOnly: 'This Host configuration is read-only.',
@@ -56,6 +57,7 @@ const zh: Record<Key, string> = {
   switchingHint: '切换到默认/继承会停用自选值；本次编辑中切回可恢复。保存或重新读取后仅保留所选模式。',
   executor: '执行器', native: 'DSH 原生队友', externalBlocked: 'P0 接入验证尚未通过，外部执行暂不可用。已保存的值会保留；此状态不代表 CLI 未安装或未认证。',
   modelMode: '模型选择', inherit: '继承会话模型', explicit: '指定模型', executorDefault: '使用外部 Agent 自身默认模型',
+  searchModels: '搜索模型', noModels: '没有匹配的模型',
   provider: '供应商', model: '模型', effort: '推理强度', modelDefault: '模型默认', chooseProvider: '选择供应商', chooseModel: '选择模型',
   unavailableOption: '{name}（当前目录不可用）', configured: '配置目标：{target}',
   loading: '正在读取 Host 配置…', unavailable: '当前 Host 未提供 team-router 配置项。', readOnly: '当前 Host 配置为只读。',
@@ -102,8 +104,69 @@ const CSS = `
 .dtr-editor button{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:7px 12px;cursor:pointer}.dtr-editor button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dtr-editor :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dtr-editor :disabled{opacity:.5;cursor:not-allowed}
 .dtr-editor button.dtr-primary{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);font-weight:600}.dtr-error{color:var(--dsw-alias-state-error-primary)}.dtr-warning{color:var(--dsw-alias-label-secondary);border-inline-start:3px solid var(--dsw-alias-state-warn-primary);padding-inline-start:10px}.dtr-success{border-inline-start:3px solid var(--dsw-alias-state-success-primary);padding-inline-start:10px}.dtr-message{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
 .dtr-editor [aria-invalid=true]{border-color:var(--dsw-alias-state-error-primary)}.dtr-footer{border-top:1px solid var(--dsw-alias-border-l3);margin-top:24px;padding-top:16px}.dtr-editor fieldset{border:0;margin:0;padding:0;min-width:0}.dtr-editor summary{cursor:pointer}.dtr-preview li{margin:8px 0;overflow-wrap:anywhere}
+.dtr-picker{position:relative}.dtr-editor .dtr-trigger{display:flex;align-items:center;justify-content:space-between;text-align:start;gap:8px;background:var(--dsw-alias-bg-base)}.dtr-trigger span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dtr-menu{position:absolute;z-index:3;inset-inline-end:0;top:calc(100% + 4px);width:max(100%,min(20rem,56cqw));padding:8px;border:1px solid var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-layer-1)}.dtr-menu-up{top:auto;bottom:calc(100% + 4px)}.dtr-options{overflow:auto;max-height:min(44vh,26rem);overscroll-behavior:contain;margin-top:6px}.dtr-group-name{display:flex;align-items:center;gap:8px;margin:10px 5px 3px;color:var(--dsw-alias-label-secondary)}.dtr-group-name::after{content:'';flex:1;border-top:1px solid var(--dsw-alias-border-l3)}.dtr-editor .dtr-option{display:flex;justify-content:space-between;width:100%;gap:6px;text-align:start;border:0;background:transparent;padding:6px 8px}.dtr-editor .dtr-option[aria-pressed=true]{color:var(--dsw-alias-brand-primary)}.dtr-options :focus-visible{outline-offset:-2px}
 @container dtr-editor (max-width:600px){.dtr-category-col{width:30%}.dtr-table th,.dtr-table td{padding:9px 8px}.dtr-controls{gap:6px 8px}.dtr-table select{padding:7px 5px}}
 `;
+
+type ModelChoice = { provider: string; id: string };
+type FieldNode = HTMLInputElement | HTMLSelectElement | HTMLButtonElement;
+function ModelPicker({ t, catalog, status, selected, label, field, onSelect }: {
+  t: Translate; catalog: ModelCatalog | undefined; status: string | undefined; selected: ModelChoice | undefined; label: string;
+  field: { id: string; ref(node: FieldNode | null): void; 'aria-invalid': boolean | undefined; 'aria-describedby': string | undefined };
+  onSelect(choice?: ModelChoice): void;
+}): React.ReactNode {
+  const [open, setOpen] = React.useState(false);
+  const [up, setUp] = React.useState(false);
+  const [query, setQuery] = React.useState('');
+  const root = React.useRef<HTMLDivElement>(null);
+  const trigger = React.useRef<HTMLButtonElement | null>(null);
+  React.useEffect(() => {
+    if (!open) return;
+    const outside = (e: PointerEvent) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, [open]);
+  const close = () => { setOpen(false); trigger.current?.focus(); };
+  const choose = (choice?: ModelChoice) => {
+    if (choice?.provider !== selected?.provider || choice?.id !== selected?.id) onSelect(choice);
+    close();
+  };
+  const filter = query.trim().toLowerCase();
+  const groups = (open && !status ? catalog?.groups : [])?.map(group => ({ ...group, models: group.models.filter(model =>
+    [group.name, group.id, model.name, model.id].some(text => text.toLowerCase().includes(filter))) })).filter(group => group.models.length) ?? [];
+  const option = (name: string, active: boolean, pick: () => void, key: string, disabled = false) =>
+    <button type="button" key={key} className="dtr-option" aria-pressed={active} disabled={disabled} onClick={pick}>{name}{active && <span aria-hidden="true">✓</span>}</button>;
+  return <div className="dtr-field dtr-picker" ref={root} onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}
+    onKeyDown={e => {
+      if (!open || e.nativeEvent.isComposing) return;
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('.dtr-option:not(:disabled)'));
+      if (!buttons.length) return;
+      e.preventDefault();
+      const index = buttons.indexOf(e.target as HTMLButtonElement);
+      buttons[e.key === 'ArrowDown' ? Math.min(index + 1, buttons.length - 1) : index < 0 ? buttons.length - 1 : Math.max(index - 1, 0)]?.focus();
+    }}>
+    <label htmlFor={field.id}>{t('model')}</label>
+    <button {...field} ref={node => { trigger.current = node; field.ref(node); }} type="button" className="dtr-trigger" title={label} aria-label={`${t('model')}: ${label}`} aria-expanded={open} aria-controls={open ? `${field.id}-menu` : undefined}
+      onClick={e => { const rect = e.currentTarget.getBoundingClientRect(); setUp(rect.top > window.innerHeight - rect.bottom && window.innerHeight - rect.bottom < Math.min(480, window.innerHeight * .52)); setQuery(''); setOpen(!open); }}>
+      <span>{label}</span><span aria-hidden="true">▾</span>
+    </button>
+    {open && <div className={`dtr-menu${up ? ' dtr-menu-up' : ''}`} id={`${field.id}-menu`}>
+      <input autoFocus type="search" aria-label={t('searchModels')} placeholder={t('searchModels')} value={query} onChange={e => setQuery(e.target.value)} />
+      <div className="dtr-options">
+        {!filter && option(t('inherit'), !selected, () => choose(), 'inherit')}
+        {groups.map(group => <div key={group.id} role="group" aria-label={group.name}>
+          <div className="dtr-group-name">{group.name}</div>
+          {group.models.map(model => option(model.name, selected?.provider === group.id && selected.id === model.id,
+            () => choose({ provider: group.id, id: model.id }), model.id, catalog?.failures.some(f => f.id === group.id)))}
+        </div>)}
+        {!groups.length && <p className="dtr-muted" role="status">{status ?? t('noModels')}</p>}
+      </div>
+    </div>}
+  </div>;
+}
 
 export const inject = ['slots', 'locale', 'configForms', 'remote', 'remote.session'];
 export function apply(ctx: Context): void {
@@ -136,7 +199,7 @@ export function apply(ctx: Context): void {
     const [preview, setPreview] = React.useState<{ value: RecommendationPreview; revision: number | undefined }>();
     const [previewError, setPreviewError] = React.useState<string>();
     const [focus, setFocus] = React.useState<string>();
-    const fields = React.useRef(new Map<string, HTMLInputElement | HTMLSelectElement>());
+    const fields = React.useRef(new Map<string, FieldNode>());
     const issueSummary = React.useRef<HTMLParagraphElement>(null);
     const instance = React.useId();
     const locale: CategoryLocale = t('language') === 'zh' ? 'zh' : 'en';
@@ -185,7 +248,7 @@ export function apply(ctx: Context): void {
       const invalid = state.issue?.section === section && state.issue.field === field;
       return {
         id: `dtr-${instance}-${section}-${field}`,
-        ref: (node: HTMLInputElement | HTMLSelectElement | null): void => {
+        ref: (node: FieldNode | null): void => {
           if (node) fields.current.set(key, node); else fields.current.delete(key);
         },
         'aria-invalid': invalid || undefined,
@@ -214,18 +277,12 @@ export function apply(ctx: Context): void {
           <label className="dtr-field">{t('executor')}<select {...fieldProps(section, 'executor')} value={target.executor} onChange={() => updateTarget(section, { executor: 'native', model: { mode: 'inherit' } })}>
             <option value="native">{t('native')}</option><option value="codex" disabled>Codex · P0</option><option value="agy" disabled>Antigravity (agy) · P0</option><option value="cursor" disabled>Cursor · P0</option>
           </select></label>
-          {target.executor === 'native' && <label className="dtr-field">{t('modelMode')}<select value={target.model.mode} onChange={event => editor.setNativeModelMode(section, event.target.value as 'inherit' | 'explicit', state.revision)}>
-            <option value="inherit">{t('inherit')}</option><option value="explicit">{t('explicit')}</option>
-          </select></label>}
+          {target.executor === 'native' && <ModelPicker t={t} catalog={catalog} status={catalogBusy ? t('catalogLoading') : catalogError === undefined ? undefined : t('catalogError', { message: catalogError })} selected={explicit}
+            field={fieldProps(section, state.issue?.section === section && state.issue.field === 'provider' ? 'provider' : 'model')}
+            label={!explicit ? t('inherit') : !explicit.id ? t('chooseModel') : model && !catalog?.failures.some(f => f.id === explicit.provider)
+              ? `${group!.name} / ${model.name}` : catalogReady ? t('unavailableOption', { name: `${explicit.provider} / ${explicit.id}` }) : `${explicit.provider} / ${explicit.id}`}
+            onSelect={choice => editor.setNativeModelMode(section, choice ? 'explicit' : 'inherit', state.revision, choice)} />}
           {explicit && <>
-            <label className="dtr-field">{t('provider')}<select {...fieldProps(section, 'provider')} value={explicit.provider} disabled={!catalogReady} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: event.target.value, id: '' } })}>
-              <option value="">{t('chooseProvider')}</option>{explicit.provider && !group && <option value={explicit.provider}>{t('unavailableOption', { name: explicit.provider })}</option>}
-              {catalog?.groups.map(group => <option value={group.id} key={group.id} disabled={catalog.failures.some(failure => failure.id === group.id)}>{group.name}</option>)}
-            </select></label>
-            <label className="dtr-field">{t('model')}<select {...fieldProps(section, 'model')} value={explicit.id} disabled={!catalogReady || !group || catalog?.failures.some(failure => failure.id === group.id)} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: explicit.provider, id: event.target.value } })}>
-              <option value="">{t('chooseModel')}</option>{explicit.id && !model && <option value={explicit.id}>{t('unavailableOption', { name: explicit.id })}</option>}
-              {group?.models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
-            </select></label>
             {(efforts.length > 0 || explicit.reasoningEffort !== undefined) && <label className="dtr-field">{t('effort')}<select {...fieldProps(section, 'effort')} value={explicit.reasoningEffort ?? ''} disabled={!catalogReady || !model} onChange={event => updateTarget(section, { executor: 'native', model: { mode: 'explicit', provider: explicit.provider, id: explicit.id, ...(event.target.value ? { reasoningEffort: event.target.value } : {}) } })}>
               <option value="">{t('modelDefault')}</option>{explicit.reasoningEffort && !efforts.some(effort => effort.id === explicit.reasoningEffort) && <option value={explicit.reasoningEffort}>{t('unavailableOption', { name: explicit.reasoningEffort })}</option>}
               {efforts.map(effort => <option value={effort.id} key={effort.id}>{effort.name}</option>)}
