@@ -1,6 +1,6 @@
 # dsh-team-router
 
-给 DSH 原生队友按任务类别选模型。v0.3.2 适配 DSH `0.2.2-rc.3`，需要 Node.js 24+。当前仅支持原生队友，Codex、agy、Cursor 外部 Agent 执行尚未开放。
+给 DSH 原生队友按任务类别选模型。`dsh-team-router@0.3.3` 的同一个安装包支持 DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**，需要 Node.js 24+。更新的宿主版本通过兼容测试后再加入，不需要开启版本豁免。当前仅支持原生队友，Codex、agy、Cursor 外部 Agent 执行尚未开放。
 
 ## 原生分工与分类路由
 
@@ -47,6 +47,6 @@ Lead 判断是否分工
 
 ## 维护者发布
 
-[GitHub Actions](<.github/workflows/publish.yml>) 在面向 `main` 的 PR 和 `main` 推送上检查并打包，不发布。只有推送 `vX.Y.Z` 稳定版标签，且提交已在 `main`、版本与包清单及锁文件一致时，才将该次检查生成的安装包发布到 npm 的 `latest`。
+[GitHub Actions](<.github/workflows/publish.yml>) 在面向 `main` 的 PR 和 `main` 推送上检查，不发布。CI 只构建一次，在 `engines.dsh` 列出的每个宿主版本上独立安装并验证同一个包；任一项失败即不发布。推送与包清单、锁文件一致的 `vX.Y.Z` 稳定版标签，且提交已在 `main` 时，CI 才把验证过的安装包发布到 npm `latest`。
 
 首次需由包维护者在 [npm 包设置](https://www.npmjs.com/package/dsh-team-router/access) 添加 GitHub Actions Trusted Publisher：仓库 `MorseWayne/dsh-team-router`、工作流 `publish.yml`、Environment 留空，允许 **Publish**。不需要 `NPM_TOKEN`。之后在干净、已同步的 `main` 上运行 `npm version patch`（或 `minor` / `major`），再运行 `git push --atomic origin main "$(git describe --tags --exact-match HEAD)"`，即可触发发布。

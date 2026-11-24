@@ -88,7 +88,7 @@ export class OfflineAdapter extends LlmAdapter {
   holdNextRequest() {
     const gate = this.makeGate();
     this.gates.push(gate);
-    return { started: gate.started.promise, release: () => gate.released.resolve() };
+    return { started: gate.started.promise, release: () => gate.released.resolve(), fail: (error: Error) => gate.released.reject(error) };
   }
 
   releaseAll() {

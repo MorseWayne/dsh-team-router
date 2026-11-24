@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { NativeHarness, config, explicitTarget, route, safePolicy } from './helpers.ts';
 import type { RoutingPolicyV2 } from '../src/routing-policy.ts';
+import { LLM_FAILURE_CODES, LlmError } from '@deepseek-ai/dsh-llm';
 import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
 import { ExecutionStore } from '../src/execution-store.ts';
 
@@ -42,6 +43,29 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
     assert.equal(h.requests(author)[0]!.reasoningEffort, 'high');
     assert.equal((await h.status(lead)).executions.find(row => row.id === quick.executionId)!.source, 'category');
     assert.deepEqual(h.errors, []);
+  });
+
+  // The rc.3 provider used MALFORMED_RESPONSE; rc.4 introduced a dedicated refusal code.
+  const refusalCode = Object.hasOwn(LLM_FAILURE_CODES, 'CONTENT_REFUSED') ? 'CONTENT_REFUSED' : 'MALFORMED_RESPONSE';
+  it(`audits ${refusalCode} as a failed native delegation without trying another model`, async (t) => {
+    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const lead = await h.lead(); h.authorize(lead);
+    const gate = h.adapter.holdNextRequest(); t.after(() => gate.release());
+    const run = await h.delegate(lead, 'quick');
+    const child = await h.child(lead, run.executionId);
+    assert.equal((await gate.started).model, 'fast');
+    const ended = Promise.withResolvers<string>();
+    t.after(h.ctx.on('subagent/end', info => { if (info.id === child.id) ended.resolve(info.stopReason); }));
+    h.allowCompletion(child);
+    gate.fail(new LlmError('Offline provider refused content', refusalCode));
+    assert.equal(await ended.promise, 'error');
+    // subagent/end precedes delivery of the native activation.result used by the audit.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    const status = await h.status(lead);
+    assert.deepEqual(status.executions.map(({ id, state, stopReason }) => ({ id, state, stopReason })),
+      [{ id: run.executionId, state: 'failed', stopReason: 'error' }]);
+    assert.equal(h.requests(child).length, 1);
+    assert.equal(h.created.length, 2, 'No fallback child was created');
   });
 
   it('rejects explicit selection without Session opt-in before creating any child', async (t) => {

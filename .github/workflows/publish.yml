@@ -14,6 +14,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      hosts: ${{ steps.matrix.outputs.hosts }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -36,6 +38,20 @@ jobs:
           }
           NODE
           git merge-base --is-ancestor HEAD refs/remotes/origin/main
+      - name: Derive test matrix from advertised host versions
+        id: matrix
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const { engines, peerDependencies } = require('./package.json');
+          const hosts = engines.dsh.split(' || ');
+          if (!hosts.every(v => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(v)) || new Set(hosts).size !== hosts.length) {
+            throw new Error('Declare an explicit list of distinct host versions so each one can be tested');
+          }
+          for (const [name, range] of Object.entries(peerDependencies)) {
+            if (name.startsWith('@deepseek-ai/dsh-') && range !== engines.dsh) throw new Error(`Mismatched host peer: ${name}`);
+          }
+          require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `hosts=${JSON.stringify(hosts)}\n`);
+          NODE
       - name: Install locked dependencies from npm
         run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/ --replace-registry-host=always
       - name: Typecheck, test and build
@@ -49,8 +65,7 @@ jobs:
           for file in package.json cordis.patch.yml lib/index.js lib/client.js; do
             grep -Fxq "package/$file" "$RUNNER_TEMP/packed-files"
           done
-      - name: Keep the tested tarball for publishing
-        if: github.ref_type == 'tag'
+      - name: Share the exact tarball with compatibility and publish jobs
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: npm-release
@@ -58,8 +73,34 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-  publish:
+  compatibility:
+    name: Packed plugin on DSH ${{ matrix.host }}
     needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        host: ${{ fromJSON(needs.check.outputs.hosts) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: npm-release
+          path: ${{ runner.temp }}/release
+      - name: Install and test the packed plugin on this host
+        env:
+          DSH_TEST_HOST: ${{ matrix.host }}
+        run: node scripts/test-host-compat.mjs "$DSH_TEST_HOST" "$RUNNER_TEMP"/release/dsh-team-router-*.tgz
+
+  publish:
+    needs: [check, compatibility]
     if: github.event_name == 'push' && github.ref_type == 'tag' && github.repository == 'MorseWayne/dsh-team-router'
     runs-on: ubuntu-latest
     timeout-minutes: 5
