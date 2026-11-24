@@ -32,7 +32,7 @@ export interface RecommendationCandidate {
  * These public model names are examples of suitable capabilities. Provider IDs must
  * match the actual Host exactly; no aliases, fuzzy matching, price or authorization claims.
  */
-export declare const RECOMMENDATION_VERSION = "2026-11-19.2";
+export declare const RECOMMENDATION_VERSION = "2026-11-24.1";
 export declare const RECOMMENDATION_CANDIDATES: Readonly<Record<CategoryId, readonly RecommendationCandidate[]>>;
 export interface RecommendationChange {
     category: CategoryId;

@@ -19,7 +19,7 @@ export interface RecommendationCandidate { readonly provider: string; readonly m
  * These public model names are examples of suitable capabilities. Provider IDs must
  * match the actual Host exactly; no aliases, fuzzy matching, price or authorization claims.
  */
-export const RECOMMENDATION_VERSION = '2026-11-19.2';
+export const RECOMMENDATION_VERSION = '2026-11-24.1';
 const candidate = (provider: string, model: string): RecommendationCandidate => Object.freeze({ provider, model });
 const sonnet = candidate('anthropic', 'claude-sonnet-4-5');
 const opus = candidate('anthropic', 'claude-opus-4-1');
@@ -40,13 +40,13 @@ const agySonnet = candidate('antigravity', 'claude-sonnet-5-5');
 const agyFlash = candidate('antigravity', 'gemini-3.8-flash');
 
 export const RECOMMENDATION_CANDIDATES: Readonly<Record<CategoryId, readonly RecommendationCandidate[]>> = Object.freeze({
-  'visual-engineering': Object.freeze([argon, geminiPro, sonnet, astra, codex]),
-  ultrabrain: Object.freeze([astra, agyOpus, opus, geminiPro, reasoner]),
-  deep: Object.freeze([astra, agySonnet, codex, sonnet, chat]),
-  artistry: Object.freeze([agyOpus, argon, opus, geminiPro, sonnet]),
-  quick: Object.freeze([subscriptionMini, agyFlash, mini, geminiFlash, chat]),
-  unspecified: Object.freeze([agySonnet, sonnet, chat, subscriptionMini, geminiFlash]),
-  writing: Object.freeze([agySonnet, sonnet, argon, geminiPro, chat]),
+  'visual-engineering': Object.freeze([argon, agyOpus, astra, geminiPro, sonnet, codex]),
+  ultrabrain: Object.freeze([astra, agyOpus, reasoner, opus, geminiPro]),
+  deep: Object.freeze([agySonnet, astra, geminiPro, agyOpus, codex, sonnet, chat]),
+  artistry: Object.freeze([agyOpus, argon, astra, opus, geminiPro, sonnet]),
+  quick: Object.freeze([subscriptionMini, agyFlash, chat, mini, geminiFlash]),
+  unspecified: Object.freeze([agySonnet, subscriptionMini, chat, sonnet, geminiFlash]),
+  writing: Object.freeze([agySonnet, astra, chat, sonnet, argon, geminiPro]),
 });
 
 export interface RecommendationChange {

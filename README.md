@@ -36,15 +36,21 @@ Lead 判断是否分工
 
 ## 七个内置类别
 
-| 类别 | 适合的任务 |
-|---|---|
-| `visual-engineering` | 前端界面、交互和布局 |
-| `ultrabrain` | 高难推理、算法和架构决策 |
-| `deep` | 需要持续探索、实现和验证的任务 |
-| `artistry` | 创意构思和发散设计 |
-| `quick` | 范围明确的小改动和查询 |
-| `unspecified` | 不适合其他类别的通用任务 |
-| `writing` | 文档、说明和报告 |
+下表是**手动选模建议**，不是插件「预览推荐配置」的实际顺序。每行按任务适配度列出三家模型厂商的候选；同一个接入渠道也可以提供不同厂商的模型。
+
+| 类别 | 适合的任务 | ① 首选 | ② 次选 | ③ 第三选择 |
+|---|---|---|---|---|
+| `visual-engineering` | 前端界面、交互和布局 | `gemini-4-argon` | `claude-opus-5-5` | `gpt-6.2-sol` |
+| `ultrabrain` | 高难推理、算法和架构决策 | `gpt-6.2-astra` | `claude-opus-5-5` | `deepseek-reasoner` |
+| `deep` | 需要持续探索、实现和验证的任务 | `claude-sonnet-5-5` | `gpt-6.2-sol` | `gemini-2.5-pro` |
+| `artistry` | 创意构思和发散设计 | `claude-opus-5-5` | `gemini-4-argon` | `gpt-6.2-sol` |
+| `quick` | 范围明确的小改动和查询 | `gpt-5.4-mini` | `gemini-3.8-flash` | `deepseek-chat` |
+| `unspecified` | 不适合其他类别的通用任务 | `claude-sonnet-5-5` | `gpt-6.2-sol` | `deepseek-chat` |
+| `writing` | 文档、说明和报告 | `claude-sonnet-5-5` | `gpt-6.2-sol` | `deepseek-chat` |
+
+**GPT 怎么选：** 参考 [OpenAI 对 GPT‑6.2 Astra 和 Sol 的定位](https://openai.com/index/introducing-gpt-6-2-astra-sol/)，高难推理优先 Astra，日常多步执行和写作优先 Sol。`quick` 保留 `gpt-5.4-mini`：短任务更看重响应延迟，目前没有同条件对比证明 6.2 在这项上更快。
+
+**如何应用：** 如果你的 DSH 模型目录列出了 6.2，可在对应类别手动选择并保存；没有则保留原模型。已发布的 `0.3.3` 仍按[该版本的内置候选列表](https://github.com/MorseWayne/dsh-team-router/blob/v0.3.3/src/recommendations.ts#L24-L50)生成预览，不会自动选用 6.2，也不会在任务失败时自动换模型。
 
 ## 从旧版升级
 

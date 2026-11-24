@@ -28,6 +28,18 @@ describe('versioned exact recommendations', () => {
     }
   });
 
+  it('offers three different model makers first, independently of adapter namespaces', () => {
+    for (const category of CATEGORY_IDS) {
+      const top = RECOMMENDATION_CANDIDATES[category].slice(0, 3);
+      const makers = top.map(({ model }) => {
+        const family = /^(gpt|claude|gemini|deepseek)-/.exec(model)?.[1];
+        assert.ok(family, `Identify the model maker for ${model}`);
+        return family;
+      });
+      assert.equal(new Set(makers).size, 3, `${category}: top three must cover three makers`);
+    }
+  });
+
   it('uses the actual test catalog to resolve every category in manifest order', () => {
     const preview = previewRecommendations(createDefaultRoutingPolicy(), catalog());
     assert.equal(preview.changes.length, 7);
@@ -49,7 +61,8 @@ describe('versioned exact recommendations', () => {
     const preview = previewRecommendations(createDefaultRoutingPolicy(), available);
     assert.equal(preview.changes.length, 7);
     assert.ok(preview.changes.every(change => change.after.target.executor === 'native'));
-    assert.deepEqual(preview.policy.categories.deep, { mode: 'target', target: { executor: 'native', model: { mode: 'explicit', provider: 'openai-codex', id: 'gpt-6-astra' } } });
+    assert.deepEqual(preview.policy.categories.ultrabrain, { mode: 'target', target: { executor: 'native', model: { mode: 'explicit', provider: 'openai-codex', id: 'gpt-6-astra' } } });
+    assert.deepEqual(preview.policy.categories.deep, { mode: 'target', target: { executor: 'native', model: { mode: 'explicit', provider: 'antigravity', id: 'claude-sonnet-5-5' } } });
   });
 
   it('never guesses provider aliases, case, model substrings, or advertised display names', () => {
