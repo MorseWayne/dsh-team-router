@@ -1,6 +1,6 @@
 {
   "name": "dsh-team-router",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Seven task-category presets and authorized creation-time model routing for native DeepSeek Harness Agent Teams.",
   "type": "module",
   "repository": {

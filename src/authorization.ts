@@ -28,5 +28,5 @@ export function assertAuthorizedRoute(routes: readonly AuthorizedRoute[] | null,
   const allowed = routes === null
     ? selected.provider === parent.provider && selected.model === parent.model
     : routes.some(route => route.provider === selected.provider && route.model === selected.model);
-  if (!allowed) throw new Error(`Model route "${selected.provider}/${selected.model}" is not authorized for this Session. Authorize it in DSH or use the inherited model; category settings do not expand Session permissions.`);
+  if (!allowed) throw new Error(`Model route "${selected.provider}/${selected.model}" is not authorized for this Session. Save the routing policy, then retry in a new Session or use the inherited model.`);
 }

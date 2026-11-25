@@ -78,12 +78,16 @@ try {
   } } };
   try { await import(pathToFileURL(localRequire.resolve(`${pkg}/client`)).href); }
   finally { delete globalThis.window; }
-  const slots = new Map(), stops = [];
+  const slots = new Map(), stops = [], requestedForms = [], optionalRemotes = [];
   client.apply({
     effect: fn => stops.push(fn()), locale: { register: () => () => {}, bind: () => key => key },
-    configForms: { get: ns => { assert.equal(ns, 'team-router'); return {}; }, whileServed: (ns, fn) => { assert.deepEqual(ns, ['team-router']); return fn(); } },
+    // A Host without the optional diagnostic remotes must still mount both editor slots.
+    inject: names => { optionalRemotes.push(...names); },
+    configForms: { get: ns => { requestedForms.push(ns); return {}; }, whileServed: (ns, fn) => { assert.deepEqual(ns, ['team-router']); return fn(); } },
     slots: { inject: (_, fn) => fn(), register: (options, component) => { slots.set(options.name, { options, component }); return () => slots.delete(options.name); } },
   });
+  assert.deepEqual(requestedForms.sort(), ['subagent-model-selection-settings', 'team-router']);
+  assert.deepEqual(optionalRemotes.sort(), ['remote.pluginManager', 'remote.settings']);
   const detail = slots.get('plugins.bundle.config'), settings = slots.get('settings.section');
   assert.equal(detail.options.key, pkg); assert.equal(settings.options.id, 'team-router');
   assert.equal(typeof detail.component, 'function'); assert.equal(detail.component, settings.component);

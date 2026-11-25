@@ -1,3 +1,5 @@
+import { planModelGrant, requiredModelRoutes } from './model-grants.ts';
+import type { ModelAuthorizationForm } from './model-grants.ts';
 import { CATEGORY_IDS } from './categories.ts';
 import type { CategoryId } from './categories.ts';
 import { previewMigration } from './migration.ts';
@@ -37,7 +39,7 @@ export type RoutingSection = CategoryId | 'default';
 export type RoutingField = 'executor' | 'provider' | 'model' | 'effort' | 'historyLimit';
 export type RoutingIssueReason = 'required' | 'history' | 'catalog' | 'catalogRequired' | 'externalUnavailable' | 'structure';
 export interface RoutingValidationIssue { section: RoutingSection; field: RoutingField; reason: RoutingIssueReason; detail?: string }
-export type RoutingEditorError = { kind: 'validation' | 'refused' | 'transport' | 'migration' | 'previewChanged'; detail: string };
+export type RoutingEditorError = { kind: 'validation' | 'refused' | 'transport' | 'migration' | 'previewChanged' | 'grantUnavailable' | 'grantReadOnly' | 'grantFailed'; detail: string };
 export interface RoutingEditorSnapshot {
   draft: RoutingDraft | undefined;
   revision: number | undefined;
@@ -138,7 +140,9 @@ export class RoutingEditor {
   private readonly stop: () => void;
   private disposed = false;
   private readonly form: RoutingForm;
-  constructor(form: RoutingForm) {
+  private readonly grants: ModelAuthorizationForm;
+  constructor(form: RoutingForm, grants: ModelAuthorizationForm) {
+    this.grants = grants;
     this.form = form;
     this.accept();
     this.stop = form.subscribe(() => {
@@ -247,7 +251,7 @@ export class RoutingEditor {
   async save(options: { catalog?: ModelCatalog; catalogReady?: boolean } = {}): Promise<boolean> {
     const state = this.state;
     const host = this.form.getSnapshot();
-    if (this.disposed || state.saving || !state.dirty || !state.draft || state.revision === undefined
+    if (this.disposed || state.saving || !state.draft || state.revision === undefined
       || host.status !== 'ready' || !host.writable) return false;
     if (state.stale || host.revision !== state.revision) {
       this.publish({ ...state, stale: true, migrationConfirmed: false, error: { kind: 'refused', detail: '' } });
@@ -264,17 +268,41 @@ export class RoutingEditor {
       this.publish({ ...state, error: { kind: 'validation', detail: error instanceof Error ? error.message : String(error) } });
       return false;
     }
+    const required = requiredModelRoutes(mutations[0]!.value);
+    const grant = planModelGrant(required, this.grants.getSnapshot());
+    if (!state.dirty && grant.kind === 'complete') return false;
+    if (grant.kind === 'unavailable' || grant.kind === 'readOnly') {
+      this.publish({ ...state, error: { kind: grant.kind === 'readOnly' ? 'grantReadOnly' : 'grantUnavailable', detail: '' }, notice: undefined });
+      return false;
+    }
     this.publish({ ...state, saving: true, issue: undefined, error: undefined, notice: undefined });
     try {
-      const accepted = await this.form.mutate(mutations, state.revision);
-      if (accepted) this.accept('saved');
-      else this.publish({ ...state, saving: false, stale: this.form.getSnapshot().revision !== state.revision,
-        error: { kind: 'refused', detail: '' }, notice: undefined });
-      return accepted;
+      // Never grant on a failed/stale policy write. Re-saving an existing policy only repairs authorization.
+      if (state.dirty && !await this.form.mutate(mutations, state.revision)) {
+        this.publish({ ...state, saving: false, stale: this.form.getSnapshot().revision !== state.revision,
+          error: { kind: 'refused', detail: '' }, notice: undefined });
+        return false;
+      }
     } catch (error) {
       this.publish({ ...state, saving: false, stale: this.form.getSnapshot().revision !== state.revision,
         error: { kind: 'transport', detail: error instanceof Error ? error.message : String(error) }, notice: undefined });
       return false;
     }
+    try {
+      if (grant.kind === 'write') {
+        const accepted = await this.grants.mutate([
+          { op: 'set', path: ['enabled'], value: true },
+          { op: 'set', path: ['allowedModels'], value: grant.routes },
+        ], grant.revision);
+        if (!accepted) throw new Error('Authorization write refused');
+      }
+      if (planModelGrant(required, this.grants.getSnapshot()).kind !== 'complete') throw new Error('Authorization not confirmed');
+    } catch {
+      this.accept(); // Policy is already persisted. Retry from the current Host revisions without rewriting it.
+      this.publish({ ...this.state, error: { kind: 'grantFailed', detail: '' }, notice: undefined });
+      return false;
+    }
+    this.accept('saved');
+    return true;
   }
 }

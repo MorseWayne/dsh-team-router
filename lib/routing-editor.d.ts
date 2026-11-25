@@ -1,3 +1,4 @@
+import type { ModelAuthorizationForm } from './model-grants.ts';
 import type { CategoryId } from './categories.ts';
 import type { MigrationPreview } from './migration.ts';
 import type { CategoryBinding, RoutingPolicyV2, Target } from './routing-policy.ts';
@@ -42,7 +43,7 @@ export interface RoutingValidationIssue {
     detail?: string;
 }
 export type RoutingEditorError = {
-    kind: 'validation' | 'refused' | 'transport' | 'migration' | 'previewChanged';
+    kind: 'validation' | 'refused' | 'transport' | 'migration' | 'previewChanged' | 'grantUnavailable' | 'grantReadOnly' | 'grantFailed';
     detail: string;
 };
 export interface RoutingEditorSnapshot {
@@ -78,7 +79,8 @@ export declare class RoutingEditor {
     private readonly stop;
     private disposed;
     private readonly form;
-    constructor(form: RoutingForm);
+    private readonly grants;
+    constructor(form: RoutingForm, grants: ModelAuthorizationForm);
     readonly getSnapshot: () => RoutingEditorSnapshot;
     readonly subscribe: (listener: () => void) => (() => void);
     dispose(): void;

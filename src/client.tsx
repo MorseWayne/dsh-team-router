@@ -2,6 +2,10 @@ import * as React from 'react';
 import type { Context } from '@deepseek-ai/cordis';
 import { CATEGORIES, CATEGORY_LIST } from './categories.ts';
 import type { CategoryLocale } from './categories.ts';
+import { MODEL_AUTHORIZATION_ENTRY, requiredModelRoutes, planModelGrant } from './model-grants.ts';
+import { GrantDiagnostics } from './GrantDiagnostics.tsx';
+import type { InventoryReader } from './grant-diagnostics.ts';
+import type { ModelAuthorizationForm } from './model-grants.ts';
 import { RoutingEditor, routingDraftToPolicy } from './routing-editor.ts';
 import type { RoutingForm, RoutingSection, RoutingField, RoutingValidationIssue } from './routing-editor.ts';
 import { previewRecommendations, RECOMMENDATION_VERSION } from './recommendations.ts';
@@ -12,7 +16,9 @@ const NS = 'teamRouter';
 const en = {
   language: 'en', title: 'Team task routing',
   description: 'Seven built-in task categories. Choose an executor and model for each; changes affect new delegations only, never a running task.',
-  authorization: 'The model catalog is not authorization. Each delegation checks the current session policy and live capabilities again.',
+  grantUnavailable: 'Cannot read DSH model authorization settings. No changes were made; check the Host and retry.',
+  grantReadOnly: 'DSH model authorization is read-only. No changes were made.',
+  grantFailed: 'Routing policy is saved, but model authorization could not be confirmed. Retry Save.' ,
   categoryColumn: 'Task category', targetColumn: 'Routing configuration', defaultPurpose: 'Used by all categories without a custom target.',
   draftTarget: 'Draft target: {target}',
   defaults: 'Default execution target', categories: 'Task presets', binding: 'Category target', useDefault: 'Use the default target', custom: 'Choose a target',
@@ -24,7 +30,7 @@ const en = {
   unavailableOption: '{name} (not available in this catalog)', configured: 'Configured target: {target}',
   loading: 'Loading Host configuration…', unavailable: 'The team-router configuration is not served by this Host.', readOnly: 'This Host configuration is read-only.',
   catalogLoading: 'Loading the live model catalog…', catalogError: 'Could not load the catalog: {message}', catalogPartial: 'Some providers failed: {message}', retry: 'Retry catalog',
-  recommendations: 'Preview recommendations', recommendationHint: 'Version {version}. Curated exact model IDs, not benchmark rankings. Missing candidates keep their current/default target. This does not grant session authorization.',
+  recommendations: 'Preview recommendations', recommendationHint: 'Version {version}. Curated exact model IDs, not benchmark rankings. Missing candidates keep their current/default target.',
   overwrite: 'Also replace my explicitly selected category targets', previewTitle: 'Review recommendation changes',
   previewHint: 'Confirming only changes the draft. Save separately to apply it. The default target is not changed.',
   applyPreview: 'Confirm changes to draft', cancelPreview: 'Keep current draft', noChanges: 'No matching changes to apply.',
@@ -36,8 +42,8 @@ const en = {
   confirmMigration: 'I confirm migration and retirement of the old routing rules', migrationConfirmed: 'Migration confirmed for this revision. Save to commit.',
   migrationRequired: 'Confirm migration before saving. Your draft is preserved.',
   advanced: 'Advanced settings and executor status', historyLimit: 'History limit (1–1000)',
-  save: 'Save policy', saving: 'Saving…', cancel: 'Cancel edits', reload: 'Discard draft and reload Host values',
-  saved: 'Policy saved. New delegations will use these settings.', dirty: 'Unsaved changes', current: 'Up to date',
+  save: 'Save', saving: 'Saving…', cancel: 'Cancel edits', reload: 'Discard draft and reload Host values',
+  saved: 'Saved.', dirty: 'Unsaved changes', current: 'Up to date',
   stale: 'The Host changed while you were editing. Your draft is preserved; reload before saving.',
   refused: 'The Host refused this save. Your draft is preserved; no automatic overwrite was attempted.',
   validationError: 'Invalid policy: {message}', transportError: 'Save failed: {message}. Your draft is preserved.',
@@ -50,7 +56,9 @@ type Key = keyof typeof en;
 const zh: Record<Key, string> = {
   language: 'zh', title: '团队任务路由',
   description: '内置七个任务类别，按类别选择执行器与模型。修改只影响后续新委派，不改变正在执行的任务。',
-  authorization: '模型目录不等于授权。执行委派时仍会重新校验当前会话的模型权限与实际能力。',
+  grantUnavailable: '无法读取 DSH 的模型授权设置，本次未更改配置。请检查 Host 后重试。',
+  grantReadOnly: 'DSH 模型授权设置为只读，本次未更改配置。',
+  grantFailed: '路由已保存，但未能确认模型授权。请再点一次「保存」重试。',
   categoryColumn: '任务类别', targetColumn: '路由配置', defaultPurpose: '所有未单独配置的类别都使用此目标。',
   draftTarget: '草稿目标：{target}',
   defaults: '默认执行目标', categories: '任务预设', binding: '类别目标', useDefault: '使用默认执行目标', custom: '单独选择目标',
@@ -62,7 +70,7 @@ const zh: Record<Key, string> = {
   unavailableOption: '{name}（当前目录不可用）', configured: '配置目标：{target}',
   loading: '正在读取 Host 配置…', unavailable: '当前 Host 未提供 team-router 配置项。', readOnly: '当前 Host 配置为只读。',
   catalogLoading: '正在读取实时模型目录…', catalogError: '无法读取模型目录：{message}', catalogPartial: '部分供应商读取失败：{message}', retry: '重试读取目录',
-  recommendations: '预览推荐配置', recommendationHint: '推荐版本 {version}。使用人工维护的精确模型标识，不代表基准最优；无匹配项保留当前/默认目标，不扩大会话授权。',
+  recommendations: '预览推荐配置', recommendationHint: '推荐版本 {version}。使用人工维护的精确模型标识，不代表基准最优；无匹配项保留当前/默认目标。',
   overwrite: '同时替换我已单独选择的类别目标', previewTitle: '确认推荐配置差异',
   previewHint: '确认后只更新草稿，仍需点击保存才会生效；不修改默认执行目标。',
   applyPreview: '确认应用到草稿', cancelPreview: '保留当前草稿', noChanges: '当前没有可应用的匹配变更。',
@@ -74,8 +82,8 @@ const zh: Record<Key, string> = {
   confirmMigration: '确认迁移并停用旧路由规则', migrationConfirmed: '已确认此版本的迁移，点击保存后提交。',
   migrationRequired: '保存前请明确确认迁移，草稿已保留。',
   advanced: '高级设置与执行器状态', historyLimit: '历史记录上限（1–1000）',
-  save: '保存策略', saving: '保存中…', cancel: '取消修改', reload: '丢弃草稿并重新读取 Host 配置',
-  saved: '策略已保存，将用于后续新委派。', dirty: '有未保存的修改', current: '已同步',
+  save: '保存', saving: '保存中…', cancel: '取消修改', reload: '丢弃草稿并重新读取 Host 配置',
+  saved: '已保存。', dirty: '有未保存的修改', current: '已同步',
   stale: '编辑期间 Host 配置已更新。草稿已保留，请重新读取后再保存。',
   refused: 'Host 拒绝了本次保存，草稿已保留；没有尝试自动覆盖其他修改。',
   validationError: '策略不合法：{message}', transportError: '保存失败：{message}。草稿已保留。',
@@ -86,9 +94,10 @@ const zh: Record<Key, string> = {
 type Translate = (key: Key, params?: Record<string, string | number>) => string;
 interface ClientServices {
   locale: { register(ns: string, dictionaries: { en: typeof en; zh: typeof zh }): () => void; bind(ns: string): Translate };
-  configForms: { get(entry: string): RoutingForm; whileServed(namespaces: string[], register: () => () => void): () => void };
+  configForms: { get(entry: typeof MODEL_AUTHORIZATION_ENTRY): ModelAuthorizationForm; get(entry: 'team-router'): RoutingForm; whileServed(namespaces: string[], register: () => () => void): () => void };
   slots: { inject(key: string, register: () => () => void): () => void; register(options: Record<string, unknown>, component: (props: { t: Translate }) => React.ReactNode): () => void };
-  remote: { session: { modelCatalog(): Promise<{ ok: true; value: ModelCatalog } | { ok: false; error: { message: string } }> }; $on(event: string, listener: () => void): () => void };
+  get(key: 'pluginNavigation'): {openBundle(name: string): void} | undefined;
+  remote: { pluginManager?: InventoryReader; settings?: {describe(): Promise<{ok: true; value: {writable: boolean; namespaces: {ns: string; revision: number; value: unknown}[]}} | {ok: false}>}; session: { modelCatalog(): Promise<{ ok: true; value: ModelCatalog } | { ok: false; error: { message: string } }> }; $on(event: string, listener: () => void): () => void };
   on(event: string, listener: () => void): () => void;
 }
 const CSS = `
@@ -173,6 +182,30 @@ export function apply(ctx: Context): void {
   const client = ctx as unknown as ClientServices;
   ctx.effect(() => client.locale.register(NS, { en, zh }), 'team-router: editor dictionaries');
   const form = client.configForms.get('team-router');
+  const grants = client.configForms.get(MODEL_AUTHORIZATION_ENTRY);
+  let reader: InventoryReader | undefined;
+  const inventory = () => reader;
+  const optional = ctx as unknown as {inject(keys: string[], callback: (child: Context) => void): void};
+  optional.inject(['remote.pluginManager'], child => {
+    reader = (child as unknown as ClientServices).remote.pluginManager;
+    child.effect(() => () => { reader = undefined; }, 'team-router: release diagnostics reader');
+  });
+  let describe: (() => ReturnType<NonNullable<ClientServices['remote']['settings']>['describe']>) | undefined;
+  optional.inject(['remote.settings'], child => {
+    const settings = (child as unknown as ClientServices).remote.settings!;
+    describe = () => settings.describe();
+    child.effect(() => () => { describe = undefined; }, 'team-router: release settings probe');
+  });
+  // This read is diagnostic only. The shared Host form remains authoritative for writes and CAS.
+  const recheck = async (): Promise<'available' | 'unchanged' | 'unknown'> => {
+    const reply = await describe?.();
+    if (!reply?.ok) return 'unknown';
+    const row = reply.value.namespaces.find(item => item.ns === MODEL_AUTHORIZATION_ENTRY);
+    const v = row?.value as Partial<NonNullable<ReturnType<typeof grants.getSnapshot>['value']>> | undefined;
+    return row && Number.isSafeInteger(row.revision) && typeof v?.enabled === 'boolean' && Array.isArray(v.allowedModels) && reply.value.writable ? 'available' : 'unchanged';
+  };
+  const readGrants = () => grants.getSnapshot();
+  const subscribeGrants = (listener: () => void) => grants.subscribe(listener);
   const readForm = () => form.getSnapshot();
   const subscribeForm = (listener: () => void) => form.subscribe(listener);
 
@@ -181,7 +214,7 @@ export function apply(ctx: Context): void {
     // Both pages observe the same Host config, but neither carries an unsaved
     // draft or migration confirmation into the other. Subscribe only on mount.
     React.useLayoutEffect(() => {
-      const mounted = new RoutingEditor(form);
+      const mounted = new RoutingEditor(form, grants);
       setEditor(mounted);
       return () => mounted.dispose();
     }, []);
@@ -190,6 +223,7 @@ export function apply(ctx: Context): void {
 
   function EditorForm({ t, editor }: { t: Translate; editor: RoutingEditor }): React.ReactNode {
     const host = React.useSyncExternalStore(subscribeForm, readForm);
+    const grantSnapshot = React.useSyncExternalStore(subscribeGrants, readGrants);
     const state = React.useSyncExternalStore(editor.subscribe, editor.getSnapshot);
     const [catalog, setCatalog] = React.useState<ModelCatalog>();
     const [catalogBusy, setCatalogBusy] = React.useState(true);
@@ -204,6 +238,10 @@ export function apply(ctx: Context): void {
     const instance = React.useId();
     const locale: CategoryLocale = t('language') === 'zh' ? 'zh' : 'en';
     const draft = state.draft;
+    const grantPlan = draft && planModelGrant(requiredModelRoutes(draft), grantSnapshot);
+    const needsGrant = grantPlan && grantPlan.kind !== 'complete';
+    const grantProblem = grantPlan?.kind === 'unavailable' ? grantPlan.reason : grantPlan?.kind === 'readOnly' ? 'readOnly' : undefined;
+    const navigation = grantProblem ? client.get('pluginNavigation') : undefined;
     const hostDisabled = state.saving || host.status !== 'ready' || !host.writable;
     const disabled = hostDisabled || preview !== undefined;
     const catalogReady = catalog !== undefined && !catalogBusy && catalogError === undefined;
@@ -326,7 +364,7 @@ export function apply(ctx: Context): void {
     };
     const issueMessage = (issue: RoutingValidationIssue): string => issue.detail ?? t(issue.reason);
     return <div className="dtr-editor" aria-busy={state.saving}>
-      <style>{CSS}</style><h2>{t('title')}</h2><p className="dtr-muted">{t('description')}</p><p className="dtr-note dtr-muted">{t('authorization')}</p><p className="dtr-muted">{t('switchingHint')}</p>
+      <style>{CSS}</style><h2>{t('title')}</h2><p className="dtr-muted">{t('description')}</p><p className="dtr-muted">{t('switchingHint')}</p>
       {host.status === 'loading' && <p role="status">{t('loading')}</p>}
       {host.status === 'unavailable' && <p role="status">{t('unavailable')}</p>}
       {host.status === 'ready' && !host.writable && <p className="dtr-warning" role="status">{t('readOnly')}</p>}
@@ -369,11 +407,13 @@ export function apply(ctx: Context): void {
         {state.stale && <p className="dtr-warning dtr-message">{t('stale')}</p>}
         {state.issue && <p ref={issueSummary} tabIndex={-1} id={`dtr-${instance}-issue`} role="alert" className="dtr-error dtr-message">{state.issue.section === 'default' ? t('defaults') : CATEGORIES[state.issue.section][locale].name} · {t(state.issue.field)}: {issueMessage(state.issue)}</p>}
         {previewError && <p role="alert" className="dtr-error dtr-message">{t('validationError', { message: previewError })}</p>}
-        {state.error && <p role="alert" className="dtr-error dtr-message">{state.error.kind === 'refused' ? t('refused') : state.error.kind === 'migration' ? t('migrationRequired') : state.error.kind === 'previewChanged' ? t('previewChanged') : t(state.error.kind === 'validation' ? 'validationError' : 'transportError', { message: state.error.detail })}</p>}
-        {state.notice === 'saved' && <p className="dtr-success dtr-message">{t('saved')}</p>}
-        <div className="dtr-actions"><span className="dtr-muted">{t(state.dirty ? 'dirty' : 'current')}</span><div className="dtr-inline">
+        {grantProblem && <GrantDiagnostics key={grantProblem} problem={grantProblem} locale={locale} inventory={inventory} recheck={recheck} dirty={state.dirty}
+          openBundle={navigation && (name => navigation.openBundle(name))} />}
+        {state.error && state.error.kind !== 'grantUnavailable' && state.error.kind !== 'grantReadOnly' && <p role="alert" className="dtr-error dtr-message">{state.error.kind === 'grantFailed' ? t('grantFailed') : state.error.kind === 'refused' ? t('refused') : state.error.kind === 'migration' ? t('migrationRequired') : state.error.kind === 'previewChanged' ? t('previewChanged') : t(state.error.kind === 'validation' ? 'validationError' : 'transportError', { message: state.error.detail })}</p>}
+        {state.notice === 'saved' && !needsGrant && <p className="dtr-success dtr-message">{t('saved')}</p>}
+        <div className="dtr-actions"><span className="dtr-muted">{state.dirty ? t('dirty') : needsGrant ? '' : t('current')}</span><div className="dtr-inline">
           <button type="button" disabled={state.saving || preview !== undefined || (!state.dirty && !state.stale)} onClick={() => { setPreviewError(undefined); editor.discard(); }}>{t(state.stale ? 'reload' : 'cancel')}</button>
-          <button type="button" className="dtr-primary" disabled={disabled || !state.dirty || state.stale} onClick={save}>{t(state.saving ? 'saving' : 'save')}</button>
+          <button type="button" className="dtr-primary" disabled={disabled || !!grantProblem || (!state.dirty && !needsGrant) || state.stale} onClick={save}>{t(state.saving ? 'saving' : 'save')}</button>
         </div></div>
       </div>
     </div>;
