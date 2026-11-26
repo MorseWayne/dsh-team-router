@@ -1,15 +1,15 @@
 # dsh-team-router
 
-给 DSH 原生子智能体与团队队友按任务类别选模型。`dsh-team-router@0.5.0` 的同一个安装包支持 DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**，需要 Node.js 24+。更新的宿主版本通过兼容测试后再加入，不需要开启版本豁免。本插件只增强 DSH 原生子智能体与团队；Codex、agy、Cursor 等外部 Agent 的执行**不在本项目范围内**，应由独立的 DSH 执行器插件接入，接入后出现在模型目录中即可被路由（见[架构说明](<docs/ARCHITECTURE.md#范围之外外部执行器>)）。
+给 DSH 原生子智能体与团队队友按任务类别选模型。`dsh-team-router@0.6.0` 的同一个安装包支持 DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**，需要 Node.js 24+。更新的宿主版本通过兼容测试后再加入，不需要开启版本豁免。本插件只增强 DSH 原生子智能体与团队；Codex、agy、Cursor 等外部 Agent 的执行**不在本项目范围内**，应由独立的 DSH 执行器插件接入，接入后出现在模型目录中即可被路由（见[架构说明](<docs/ARCHITECTURE.md#范围之外外部执行器>)）。
 
 ## 安装
 
-**DSH Web（推荐）：** 打开 **插件 → 添加插件**，输入 `dsh-team-router@0.5.0`，安装并启用。刷新页面；如果提示需要重启，请先重启 DSH。
+**DSH Web（推荐）：** 打开 **插件 → 添加插件**，输入 `dsh-team-router@0.6.0`，安装并启用。刷新页面；如果提示需要重启，请先重启 DSH。
 
 **命令行：** 在运行 DSH 的机器上执行（以下以 `web` profile 为例；使用其他 profile 时请替换 `web`）：
 
 ```bash
-dsh plugin --profile web add dsh-team-router@0.5.0
+dsh plugin --profile web add dsh-team-router@0.6.0
 ```
 
 **验证安装：** 打开同一 profile 的 **插件 → 团队任务路由**，确认插件已启用。说明下方出现包含七个任务类别的配置表，即安装成功。
