@@ -28,6 +28,7 @@ import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory';
 import * as router from '../src/index.ts';
 import { NativeTeams } from '../src/adapter/dsh/native-team.ts';
 import type { Config as EffectiveRouterConfig } from '../src/adapter/dsh/config.ts';
+import type { DelegationMode } from '../src/core/native-subagent.ts';
 import type { RouterConfig } from '../src/core/policy.ts';
 import type { RoutingPolicyV2, Target } from '../src/core/routing-policy.ts';
 import type { ExecutionRecord } from '../src/core/execution-store.ts';
@@ -49,6 +50,7 @@ export const explicitTarget = (model: string, reasoningEffort?: string): Target 
 });
 type HarnessConfig = (RouterConfig | { policyV2: RoutingPolicyV2 }) & {
   nativeSubagentGuidance?: boolean;
+  delegationMode?: DelegationMode;
   enforceNativeSubagentRouting?: boolean;
 };
 
@@ -219,7 +221,7 @@ export class NativeHarness {
     const active = fiber.effectiveConfig as EffectiveRouterConfig;
     const candidate = fiber.resolveConfig({ ...policy, stateDir: active.stateDir }) as EffectiveRouterConfig;
     assert.equal(candidate.stateDir, active.stateDir, 'This helper only commits live policy fields');
-    for (const key of ['policyV2', 'routes', 'rules', 'roles', 'defaultRoute', 'historyLimit', 'nativeSubagentGuidance', 'enforceNativeSubagentRouting'] as const) {
+    for (const key of ['policyV2', 'routes', 'rules', 'roles', 'defaultRoute', 'historyLimit', 'nativeSubagentGuidance', 'delegationMode', 'enforceNativeSubagentRouting'] as const) {
       updateVolatile(active[key], candidate[key]);
     }
     assert.equal(fiber.effectiveConfig, active, 'Live updates retain the native effective config references');

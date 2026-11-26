@@ -4,11 +4,18 @@ import { CATEGORY_IDS } from '../core/categories.ts';
 import type { CategoryId } from '../core/categories.ts';
 import { previewMigration } from '../core/migration.ts';
 import type { MigrationPreview } from '../core/migration.ts';
+import { isDelegationMode } from '../core/native-subagent.ts';
+import type { DelegationMode } from '../core/native-subagent.ts';
 import { parseRoutingPolicy } from '../core/routing-policy.ts';
 import type { CategoryBinding, RoutingPolicyV2, Target } from '../core/routing-policy.ts';
 import type { RouterConfig } from '../core/policy.ts';
 import { routingPolicyFingerprint } from '../core/recommendations.ts';
 import type { ModelCatalog, RecommendationPreview } from '../core/recommendations.ts';
+
+export interface RoutingBehaviorSettings {
+  delegationMode: DelegationMode;
+  enforceNativeSubagentRouting: boolean;
+}
 
 export interface RoutingFormValue {
   policyV2?: RoutingPolicyV2 | null;
@@ -17,6 +24,8 @@ export interface RoutingFormValue {
   roles?: RouterConfig['roles'];
   defaultRoute?: string | null;
   historyLimit?: number;
+  delegationMode?: DelegationMode;
+  enforceNativeSubagentRouting?: boolean;
 }
 export interface RoutingFormSnapshot {
   status: 'loading' | 'ready' | 'unavailable';
@@ -24,7 +33,10 @@ export interface RoutingFormSnapshot {
   revision: number | undefined;
   writable: boolean;
 }
-export interface RoutingMutation { op: 'set'; path: ['policyV2']; value: RoutingPolicyV2 }
+export type RoutingMutation =
+  | { op: 'set'; path: ['policyV2']; value: RoutingPolicyV2 }
+  | { op: 'set'; path: ['delegationMode']; value: DelegationMode }
+  | { op: 'set'; path: ['enforceNativeSubagentRouting']; value: boolean };
 export interface RoutingForm {
   getSnapshot(): RoutingFormSnapshot;
   subscribe(listener: () => void): () => void;
@@ -42,6 +54,7 @@ export interface RoutingValidationIssue { section: RoutingSection; field: Routin
 export type RoutingEditorError = { kind: 'validation' | 'refused' | 'transport' | 'migration' | 'previewChanged' | 'grantUnavailable' | 'grantReadOnly' | 'grantFailed'; detail: string };
 export interface RoutingEditorSnapshot {
   draft: RoutingDraft | undefined;
+  behavior: RoutingBehaviorSettings;
   revision: number | undefined;
   dirty: boolean;
   saving: boolean;
@@ -52,6 +65,18 @@ export interface RoutingEditorSnapshot {
   issue: RoutingValidationIssue | undefined;
   error: RoutingEditorError | undefined;
   notice: 'saved' | undefined;
+}
+
+const DEFAULT_BEHAVIOR: RoutingBehaviorSettings = {
+  delegationMode: 'passive',
+  enforceNativeSubagentRouting: false,
+};
+
+export function readBehaviorSettings(value: RoutingFormValue | undefined): RoutingBehaviorSettings {
+  return {
+    delegationMode: isDelegationMode(value?.delegationMode) ? value.delegationMode : 'passive',
+    enforceNativeSubagentRouting: value?.enforceNativeSubagentRouting === true,
+  };
 }
 
 export function routingPolicyToDraft(input: unknown): RoutingDraft {
@@ -130,13 +155,15 @@ export function routingDraftIssue(
 /** Staged, revision-bound V2 editor. Migration, preview application, and save are explicit actions. */
 export class RoutingEditor {
   private state: RoutingEditorSnapshot = {
-    draft: undefined, revision: undefined, dirty: false, saving: false, stale: false,
+    draft: undefined, behavior: { ...DEFAULT_BEHAVIOR }, revision: undefined, dirty: false, saving: false, stale: false,
     migrationRequired: false, migrationConfirmed: false, retired: undefined,
     issue: undefined, error: undefined, notice: undefined,
   };
   private listeners = new Set<() => void>();
   private readonly customTargets = new Map<CategoryId, Target>();
   private readonly nativeModels = new Map<RoutingSection, Extract<Target, { executor: 'native' }>>();
+  private policyDirty = false;
+  private savedBehavior: RoutingBehaviorSettings = { ...DEFAULT_BEHAVIOR };
   private readonly stop: () => void;
   private disposed = false;
   private readonly form: RoutingForm;
@@ -180,18 +207,21 @@ export class RoutingEditor {
   }
   private accept(notice?: 'saved'): void {
     const host = this.form.getSnapshot();
+    const behavior = readBehaviorSettings(host.value);
+    this.policyDirty = false;
+    this.savedBehavior = behavior;
     try {
       const value = host.value === undefined ? undefined : routingFormPreview(host.value);
       const draft = value === undefined ? undefined : routingPolicyToDraft(value.policy);
       this.customTargets.clear(); this.nativeModels.clear();
       if (draft) this.remember(draft, true);
       this.publish({
-        draft, revision: host.revision,
+        draft, behavior: { ...behavior }, revision: host.revision,
         dirty: false, saving: false, stale: false, migrationRequired: value?.required ?? false,
         migrationConfirmed: false, retired: value?.retired, issue: undefined, error: undefined, notice,
       });
     } catch (error) {
-      this.publish({ ...this.state, draft: undefined, revision: host.revision, dirty: false, saving: false,
+      this.publish({ ...this.state, draft: undefined, behavior: { ...behavior }, revision: host.revision, dirty: false, saving: false,
         stale: false, migrationRequired: false, migrationConfirmed: false, retired: undefined,
         issue: undefined, error: { kind: 'validation', detail: error instanceof Error ? error.message : String(error) }, notice: undefined });
     }
@@ -200,9 +230,26 @@ export class RoutingEditor {
     const host = this.form.getSnapshot();
     if (this.disposed || this.state.saving || host.status !== 'ready' || !host.writable) return;
     const stale = host.revision !== revision;
+    this.policyDirty = true;
     this.remember(draft);
     this.publish({ ...this.state, draft: structuredClone(draft), revision, dirty: true, stale,
       migrationConfirmed: stale ? false : this.state.migrationConfirmed, issue: undefined, error: undefined, notice: undefined });
+  }
+  editBehavior(patch: Partial<RoutingBehaviorSettings>, revision = this.state.revision): void {
+    const host = this.form.getSnapshot();
+    if (this.disposed || this.state.saving || host.status !== 'ready' || !host.writable) return;
+    const stale = host.revision !== revision;
+    const behavior: RoutingBehaviorSettings = {
+      delegationMode: patch.delegationMode ?? this.state.behavior.delegationMode,
+      enforceNativeSubagentRouting: patch.enforceNativeSubagentRouting ?? this.state.behavior.enforceNativeSubagentRouting,
+    };
+    const behaviorDirty = behavior.delegationMode !== this.savedBehavior.delegationMode
+      || behavior.enforceNativeSubagentRouting !== this.savedBehavior.enforceNativeSubagentRouting;
+    this.publish({
+      ...this.state, behavior, revision, dirty: this.policyDirty || behaviorDirty, stale,
+      migrationConfirmed: stale ? false : this.state.migrationConfirmed,
+      issue: undefined, error: undefined, notice: undefined,
+    });
   }
   /** Preserve dormant custom choices within this edit session, but never persist them in default bindings. */
   setCategoryMode(category: CategoryId, mode: 'default' | 'target', revision = this.state.revision): void {
@@ -229,6 +276,7 @@ export class RoutingEditor {
     const host = this.form.getSnapshot();
     if (this.disposed || this.state.saving || !this.state.migrationRequired || host.status !== 'ready' || !host.writable
       || revision === undefined || revision !== this.state.revision || revision !== host.revision) return false;
+    this.policyDirty = true;
     this.publish({ ...this.state, migrationConfirmed: true, dirty: true, error: undefined, notice: undefined });
     return true;
   }
@@ -260,17 +308,31 @@ export class RoutingEditor {
     if (state.migrationRequired && !state.migrationConfirmed) {
       this.publish({ ...state, error: { kind: 'migration', detail: '' } }); return false;
     }
-    const issue = routingDraftIssue(state.draft, options.catalog, options.catalogReady ?? options.catalog !== undefined);
-    if (issue) { this.publish({ ...state, issue, error: undefined, notice: undefined }); return false; }
-    let mutations: RoutingMutation[];
-    try { mutations = routingPolicyMutations(routingDraftToPolicy(state.draft)); }
+    const behaviorOps: RoutingMutation[] = [];
+    if (state.behavior.delegationMode !== this.savedBehavior.delegationMode) {
+      behaviorOps.push({ op: 'set', path: ['delegationMode'], value: state.behavior.delegationMode });
+    }
+    if (state.behavior.enforceNativeSubagentRouting !== this.savedBehavior.enforceNativeSubagentRouting) {
+      behaviorOps.push({ op: 'set', path: ['enforceNativeSubagentRouting'], value: state.behavior.enforceNativeSubagentRouting });
+    }
+    let parsedPolicy: RoutingPolicyV2;
+    try { parsedPolicy = routingDraftToPolicy(state.draft); }
     catch (error) {
       this.publish({ ...state, error: { kind: 'validation', detail: error instanceof Error ? error.message : String(error) } });
       return false;
     }
-    const required = requiredModelRoutes(mutations[0]!.value);
+    const required = requiredModelRoutes(parsedPolicy);
     const grant = planModelGrant(required, this.grants.getSnapshot());
-    if (!state.dirty && grant.kind === 'complete') return false;
+    const behaviorOnly = !this.policyDirty && behaviorOps.length > 0 && grant.kind === 'complete';
+    if (!behaviorOnly) {
+      const issue = routingDraftIssue(state.draft, options.catalog, options.catalogReady ?? options.catalog !== undefined);
+      if (issue) { this.publish({ ...state, issue, error: undefined, notice: undefined }); return false; }
+    }
+    const mutations: RoutingMutation[] = [
+      ...(this.policyDirty ? routingPolicyMutations(parsedPolicy) : []),
+      ...behaviorOps,
+    ];
+    if (mutations.length === 0 && grant.kind === 'complete') return false;
     if (grant.kind === 'unavailable' || grant.kind === 'readOnly') {
       this.publish({ ...state, error: { kind: grant.kind === 'readOnly' ? 'grantReadOnly' : 'grantUnavailable', detail: '' }, notice: undefined });
       return false;
@@ -278,7 +340,7 @@ export class RoutingEditor {
     this.publish({ ...state, saving: true, issue: undefined, error: undefined, notice: undefined });
     try {
       // Never grant on a failed/stale policy write. Re-saving an existing policy only repairs authorization.
-      if (state.dirty && !await this.form.mutate(mutations, state.revision)) {
+      if (mutations.length > 0 && !await this.form.mutate(mutations, state.revision)) {
         this.publish({ ...state, saving: false, stale: this.form.getSnapshot().revision !== state.revision,
           error: { kind: 'refused', detail: '' }, notice: undefined });
         return false;

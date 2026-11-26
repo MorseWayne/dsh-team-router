@@ -1,9 +1,14 @@
 import type { ModelAuthorizationForm } from './model-grants.ts';
 import type { CategoryId } from '../core/categories.ts';
 import type { MigrationPreview } from '../core/migration.ts';
+import type { DelegationMode } from '../core/native-subagent.ts';
 import type { CategoryBinding, RoutingPolicyV2, Target } from '../core/routing-policy.ts';
 import type { RouterConfig } from '../core/policy.ts';
 import type { ModelCatalog, RecommendationPreview } from '../core/recommendations.ts';
+export interface RoutingBehaviorSettings {
+    delegationMode: DelegationMode;
+    enforceNativeSubagentRouting: boolean;
+}
 export interface RoutingFormValue {
     policyV2?: RoutingPolicyV2 | null;
     routes?: RouterConfig['routes'];
@@ -11,6 +16,8 @@ export interface RoutingFormValue {
     roles?: RouterConfig['roles'];
     defaultRoute?: string | null;
     historyLimit?: number;
+    delegationMode?: DelegationMode;
+    enforceNativeSubagentRouting?: boolean;
 }
 export interface RoutingFormSnapshot {
     status: 'loading' | 'ready' | 'unavailable';
@@ -18,11 +25,19 @@ export interface RoutingFormSnapshot {
     revision: number | undefined;
     writable: boolean;
 }
-export interface RoutingMutation {
+export type RoutingMutation = {
     op: 'set';
     path: ['policyV2'];
     value: RoutingPolicyV2;
-}
+} | {
+    op: 'set';
+    path: ['delegationMode'];
+    value: DelegationMode;
+} | {
+    op: 'set';
+    path: ['enforceNativeSubagentRouting'];
+    value: boolean;
+};
 export interface RoutingForm {
     getSnapshot(): RoutingFormSnapshot;
     subscribe(listener: () => void): () => void;
@@ -48,6 +63,7 @@ export type RoutingEditorError = {
 };
 export interface RoutingEditorSnapshot {
     draft: RoutingDraft | undefined;
+    behavior: RoutingBehaviorSettings;
     revision: number | undefined;
     dirty: boolean;
     saving: boolean;
@@ -59,6 +75,7 @@ export interface RoutingEditorSnapshot {
     error: RoutingEditorError | undefined;
     notice: 'saved' | undefined;
 }
+export declare function readBehaviorSettings(value: RoutingFormValue | undefined): RoutingBehaviorSettings;
 export declare function routingPolicyToDraft(input: unknown): RoutingDraft;
 export declare function routingDraftToPolicy(draft: RoutingDraft): RoutingPolicyV2;
 /** Select legacy fields explicitly; stateDir and future Host fields are not policy inputs. */
@@ -76,6 +93,8 @@ export declare class RoutingEditor {
     private listeners;
     private readonly customTargets;
     private readonly nativeModels;
+    private policyDirty;
+    private savedBehavior;
     private readonly stop;
     private disposed;
     private readonly form;
@@ -88,6 +107,7 @@ export declare class RoutingEditor {
     private remember;
     private accept;
     edit(draft: RoutingDraft, revision?: number | undefined): void;
+    editBehavior(patch: Partial<RoutingBehaviorSettings>, revision?: number | undefined): void;
     /** Preserve dormant custom choices within this edit session, but never persist them in default bindings. */
     setCategoryMode(category: CategoryId, mode: 'default' | 'target', revision?: number | undefined): void;
     /** Returning from inheritance restores the last explicit native choice until save/reload. */

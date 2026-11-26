@@ -10,6 +10,7 @@ import { RoutingEditor, routingDraftToPolicy } from './routing-editor.ts';
 import type { RoutingForm, RoutingSection, RoutingField, RoutingValidationIssue } from './routing-editor.ts';
 import { previewRecommendations, RECOMMENDATION_VERSION } from '../core/recommendations.ts';
 import type { ModelCatalog, RecommendationPreview } from '../core/recommendations.ts';
+import type { DelegationMode } from '../core/native-subagent.ts';
 import type { CategoryBinding, Target } from '../core/routing-policy.ts';
 
 const NS = 'teamRouter';
@@ -41,6 +42,13 @@ const en = {
   migrationCounts: '{routes} named routes, {rules} task rules, {roles} role mappings will stop participating in routing.',
   confirmMigration: 'I confirm migration and retirement of the old routing rules', migrationConfirmed: 'Migration confirmed for this revision. Save to commit.',
   migrationRequired: 'Confirm migration before saving. Your draft is preserved.',
+  behaviorTitle: 'Routing behavior',
+  behaviorHint: 'Controls when the main assistant proactively delegates specialist work and whether native subagent calls are strictly validated. Takes effect on the next turn after saving.',
+  delegationMode: 'Delegation trigger mode',
+  delegationPassive: 'Passive (default) — route only when the assistant decides to spawn a subagent',
+  delegationSpecialistFirst: 'Specialist-first — proactively delegate substantive specialist tasks whose configured model differs from the current session',
+  delegationSpecialistNote: 'Applies only to root sessions and specialist categories (visual-engineering, ultrabrain, deep, artistry, writing) with a model distinct from the current session; never triggers recursively inside subagents.',
+  enforceRouting: 'Strict native subagent validation (deny subagent calls that do not match the routing table and ask the assistant to retry)',
   advanced: 'Advanced settings and executor status', historyLimit: 'History limit (1–1000)',
   save: 'Save', saving: 'Saving…', cancel: 'Cancel edits', reload: 'Discard draft and reload Host values',
   saved: 'Saved.', dirty: 'Unsaved changes', current: 'Up to date',
@@ -81,6 +89,13 @@ const zh: Record<Key, string> = {
   migrationCounts: '将停用 {routes} 条命名路由、{rules} 条任务规则、{roles} 条角色映射。',
   confirmMigration: '确认迁移并停用旧路由规则', migrationConfirmed: '已确认此版本的迁移，点击保存后提交。',
   migrationRequired: '保存前请明确确认迁移，草稿已保留。',
+  behaviorTitle: '路由行为',
+  behaviorHint: '控制主助手何时主动委派专长任务，以及是否严格校验原生 subagent 选模参数。保存后对下一轮对话立即生效，无需重启。',
+  delegationMode: '委派触发模式',
+  delegationPassive: '被动路由（默认）— 仅在主助手决定派生子智能体时套用类别模型',
+  delegationSpecialistFirst: '专长优先 — 遇到明显匹配专门类别且目标模型不同于当前会话的非简单任务时，建议主助手主动委派并验收',
+  delegationSpecialistNote: '仅对主会话且目标模型不同于当前会话的专门类别（视觉工程、深度推理、自主执行、创意探索、文档写作）生效；简单问答不触发，子智能体内部不递归触发。',
+  enforceRouting: '严格校验原生 subagent 参数（拦截不匹配路由表的调用并提示主助手重填）',
   advanced: '高级设置与执行器状态', historyLimit: '历史记录上限（1–1000）',
   save: '保存', saving: '保存中…', cancel: '取消修改', reload: '丢弃草稿并重新读取 Host 配置',
   saved: '已保存。', dirty: '有未保存的修改', current: '已同步',
@@ -108,7 +123,7 @@ const CSS = `
 .dtr-table{width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0;margin-top:12px;border:1px solid var(--dsw-alias-border-l3);border-radius:10px;color:inherit}.dtr-category-col{width:26%}
 .dtr-table th,.dtr-table td{text-align:start;vertical-align:top;padding:12px 14px;overflow-wrap:anywhere}.dtr-table thead th{font-size:13px;font-weight:600;color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-bg-layer-1)}.dtr-table thead th:first-child{border-start-start-radius:9px}.dtr-table thead th:last-child{border-start-end-radius:9px}
 .dtr-table tbody th,.dtr-table td{border-block-start:1px solid var(--dsw-alias-border-l3)}.dtr-table td,.dtr-table thead th+th{border-inline-start:1px solid var(--dsw-alias-border-l3)}.dtr-table th[scope=row]{font-weight:400}.dtr-table th strong,.dtr-table th code,.dtr-purpose{display:block}.dtr-table th code{font-size:11px;color:var(--dsw-alias-label-secondary)}.dtr-purpose,.dtr-target-summary{color:var(--dsw-alias-label-secondary);font-size:12px;margin:4px 0 0}.dtr-table tr:focus-within th[scope=row]{box-shadow:inset 3px 0 var(--dsw-alias-brand-primary)}
-.dtr-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,10.5rem),1fr));gap:8px 12px;align-items:end}.dtr-controls>.dtr-target-summary{align-self:center}.dtr-table td>.dtr-target-summary{margin-top:8px}.dtr-field{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary)}
+.dtr-controls{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,10.5rem),1fr));gap:8px 12px;align-items:end}.dtr-controls>.dtr-target-summary{align-self:center}.dtr-table td>.dtr-target-summary{margin-top:8px}.dtr-field{display:flex;flex-direction:column;gap:4px;min-width:0;font-size:12px;color:var(--dsw-alias-label-secondary)}.dtr-behavior{display:flex;flex-direction:column;gap:12px;max-width:46rem}
 .dtr-editor input,.dtr-editor select{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:8px 10px;min-width:0;width:100%}.dtr-editor input[type=checkbox]{width:auto}
 .dtr-editor button{font:inherit;font-size:13px;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l3);border-radius:8px;padding:7px 12px;cursor:pointer}.dtr-editor button:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}.dtr-editor :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.dtr-editor :disabled{opacity:.5;cursor:not-allowed}
 .dtr-editor button.dtr-primary{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);font-weight:600}.dtr-error{color:var(--dsw-alias-state-error-primary)}.dtr-warning{color:var(--dsw-alias-label-secondary);border-inline-start:3px solid var(--dsw-alias-state-warn-primary);padding-inline-start:10px}.dtr-success{border-inline-start:3px solid var(--dsw-alias-state-success-primary);padding-inline-start:10px}.dtr-message{font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere;margin:12px 0}
@@ -389,6 +404,31 @@ export function apply(ctx: Context): void {
                 {CATEGORY_LIST.map(entry => routeRow(entry.id, entry[locale].name, entry[locale].purpose))}
               </tbody>
             </table>
+          </section>
+          <section className="dtr-section" aria-labelledby={`dtr-${instance}-behavior`}>
+            <h3 id={`dtr-${instance}-behavior`}>{t('behaviorTitle')}</h3>
+            <p className="dtr-muted">{t('behaviorHint')}</p>
+            <div className="dtr-behavior">
+              <label className="dtr-field">
+                {t('delegationMode')}
+                <select
+                  value={state.behavior.delegationMode}
+                  onChange={event => editor.editBehavior({ delegationMode: event.target.value as DelegationMode }, state.revision)}
+                >
+                  <option value="passive">{t('delegationPassive')}</option>
+                  <option value="specialist-first">{t('delegationSpecialistFirst')}</option>
+                </select>
+              </label>
+              {state.behavior.delegationMode === 'specialist-first' && <p className="dtr-muted">{t('delegationSpecialistNote')}</p>}
+              <label className="dtr-inline">
+                <input
+                  type="checkbox"
+                  checked={state.behavior.enforceNativeSubagentRouting}
+                  onChange={event => editor.editBehavior({ enforceNativeSubagentRouting: event.target.checked }, state.revision)}
+                />
+                <span>{t('enforceRouting')}</span>
+              </label>
+            </div>
           </section>
           <details className="dtr-section"><summary>{t('advanced')}</summary><p className="dtr-warning dtr-message">Codex / Antigravity (agy) / Cursor: {t('externalBlocked')}</p>
             <label className="dtr-field">{t('historyLimit')}<input {...fieldProps('default', 'historyLimit')} type="number" min={1} max={1000} step={1} value={draft.historyLimit} onChange={event => editor.edit({ ...draft, historyLimit: event.target.value }, state.revision)} /></label>

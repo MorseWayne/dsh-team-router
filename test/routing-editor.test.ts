@@ -60,10 +60,15 @@ class FakeForm implements RoutingForm {
     if (this.delay) await new Promise<void>(resolve => { this.pending = resolve; });
     if (this.transportError) throw new Error('network failed');
     if (this.reject || revision !== this.state.revision) return false;
-    assert.equal(ops.length, 1);
-    assert.equal(ops[0]!.op, 'set');
-    assert.deepEqual(ops[0]!.path, ['policyV2']);
-    this.push({ ...this.state.value, policyV2: ops[0]!.value });
+    const next: RoutingFormValue = { ...this.state.value };
+    for (const op of ops) {
+      assert.equal(op.op, 'set');
+      if (op.path[0] === 'policyV2') next.policyV2 = op.value;
+      else if (op.path[0] === 'delegationMode') next.delegationMode = op.value;
+      else if (op.path[0] === 'enforceNativeSubagentRouting') next.enforceNativeSubagentRouting = op.value;
+      else assert.fail(`Unexpected mutation path: ${op.path.join('.')}`);
+    }
+    this.push(next);
     return true;
   }
 }
@@ -443,5 +448,46 @@ describe('revision-bound V2 editor', () => {
     editor.dispose();
     assert.equal(form.listeners.size, 0);
     assert.equal(await editor.save(), false);
+  });
+
+  it('edits and saves routing behavior toggles cleanly without rewriting unchanged policyV2', async () => {
+    const policy = createDefaultRoutingPolicy();
+    policy.categories.writing = { mode: 'target', target: { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini' } } };
+    const form = new FakeForm({ policyV2: policy });
+    form.grants.state.value = { enabled: true, allowedModels: [{ provider: 'openai', model: 'gpt-5-mini' }] };
+    const editor = new RoutingEditor(form, form.grants);
+
+    assert.deepEqual(editor.getSnapshot().behavior, { delegationMode: 'passive', enforceNativeSubagentRouting: false });
+    assert.equal(editor.getSnapshot().dirty, false);
+
+    // Flipping a toggle marks dirty; flipping back clears dirty.
+    editor.editBehavior({ delegationMode: 'specialist-first' });
+    assert.equal(editor.getSnapshot().dirty, true);
+    assert.equal(editor.getSnapshot().behavior.delegationMode, 'specialist-first');
+    editor.editBehavior({ delegationMode: 'passive' });
+    assert.equal(editor.getSnapshot().dirty, false);
+
+    // Behavior-only save succeeds even without catalog loaded and writes only the changed behavior op(s).
+    editor.editBehavior({ delegationMode: 'specialist-first', enforceNativeSubagentRouting: true });
+    assert.equal(await editor.save({ catalogReady: false }), true);
+    assert.equal(form.writes.length, 1);
+    assert.deepEqual(form.writes[0]!.ops, [
+      { op: 'set', path: ['delegationMode'], value: 'specialist-first' },
+      { op: 'set', path: ['enforceNativeSubagentRouting'], value: true },
+    ]);
+    assert.equal(form.state.value?.delegationMode, 'specialist-first');
+    assert.equal(form.state.value?.enforceNativeSubagentRouting, true);
+    assert.equal(editor.getSnapshot().dirty, false);
+    assert.equal(editor.getSnapshot().notice, 'saved');
+
+    // Editing both policy and behavior writes them together in one atomic mutate call.
+    editHistory(editor, '55');
+    editor.editBehavior({ enforceNativeSubagentRouting: false });
+    assert.equal(await editor.save({ catalog: available }), true);
+    assert.equal(form.writes.length, 2);
+    assert.deepEqual(form.writes[1]!.ops.map(op => op.path), [['policyV2'], ['enforceNativeSubagentRouting']]);
+    assert.equal(form.state.value?.policyV2?.historyLimit, 55);
+    assert.equal(form.state.value?.enforceNativeSubagentRouting, false);
+    editor.dispose();
   });
 });

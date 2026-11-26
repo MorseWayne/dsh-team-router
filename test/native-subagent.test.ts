@@ -160,6 +160,54 @@ describe('core native subagent routing guidance and validation', () => {
     assert.equal(plan.inheritAllowed, true);
     assert.deepEqual(validateNativeSubagentCall(withExternal, { prompt: 'p', description: 'd' }, auth), { ok: true });
   });
+
+  it('adds specialist-first guidance only for distinct specialist categories on root agents', () => {
+    const policy: RoutingPolicyV2 = {
+      ...safePolicy(),
+      categories: {
+        ultrabrain: { mode: 'target', target: explicitTarget('review', 'high') },
+        writing: { mode: 'target', target: explicitTarget('strong') }, // same provider/model as parent (no distinct effort)
+        quick: { mode: 'target', target: explicitTarget('fast') }, // non-specialist category
+        unspecified: { mode: 'target', target: explicitTarget('fast') }, // fallback category
+      },
+    };
+    const auth = [{ provider: 'offline', model: 'strong' }, { provider: 'offline', model: 'fast' }, { provider: 'offline', model: 'review' }];
+    const parent = { provider: 'offline', model: 'strong' };
+
+    // Passive mode (default): no proactive delegation paragraph.
+    const passive = buildNativeSubagentGuidance(policy, { authorizedRoutes: auth, parentRoute: parent, delegationMode: 'passive', isRoot: true });
+    assert.doesNotMatch(passive, /Specialist-first delegation/);
+
+    // Specialist-first on root: includes ONLY ultrabrain (excludes writing=same model, quick, unspecified).
+    const proactive = buildNativeSubagentGuidance(policy, { authorizedRoutes: auth, parentRoute: parent, delegationMode: 'specialist-first', isRoot: true });
+    assert.match(proactive, /Specialist-first delegation is enabled for this session/);
+    assert.match(proactive, /\(ultrabrain\)/);
+    assert.doesNotMatch(proactive, /\([^)]*writing[^)]*\)/);
+    assert.doesNotMatch(proactive, /\([^)]*quick[^)]*\)/);
+    assert.doesNotMatch(proactive, /\([^)]*unspecified[^)]*\)/);
+
+    // Distinct reasoningEffort on same model counts as a specialist upgrade.
+    const effortUpgradePolicy: RoutingPolicyV2 = {
+      ...safePolicy(),
+      categories: { ultrabrain: { mode: 'target', target: explicitTarget('strong', 'high') } },
+    };
+    const effortProactive = buildNativeSubagentGuidance(effortUpgradePolicy, {
+      authorizedRoutes: auth, parentRoute: { provider: 'offline', model: 'strong', reasoningEffort: 'low' },
+      delegationMode: 'specialist-first', isRoot: true,
+    });
+    assert.match(effortProactive, /Specialist-first delegation.*\(ultrabrain\)/);
+
+    // Child subagent (isRoot: false): NEVER receives proactive delegation guidance (prevents recursion).
+    const child = buildNativeSubagentGuidance(policy, { authorizedRoutes: auth, parentRoute: parent, delegationMode: 'specialist-first', isRoot: false });
+    assert.match(child, /Category routes:/);
+    assert.doesNotMatch(child, /Specialist-first delegation/);
+
+    // Team fallback also respects distinct specialist categories and isRoot.
+    const fallbackRoot = buildTeamFallbackGuidance(policy, { authorizedRoutes: auth, parentRoute: parent, delegationMode: 'specialist-first', isRoot: true });
+    assert.match(fallbackRoot, /Specialist-first delegation is enabled.*\(ultrabrain\)/);
+    const fallbackChild = buildTeamFallbackGuidance(policy, { authorizedRoutes: auth, parentRoute: parent, delegationMode: 'specialist-first', isRoot: false });
+    assert.doesNotMatch(fallbackChild, /Specialist-first delegation/);
+  });
 });
 
 describe('native subagent routing integration (no Team mode required)', { concurrency: false, timeout: 30_000 }, () => {
@@ -284,5 +332,35 @@ describe('native subagent routing integration (no Team mode required)', { concur
     const result = await runSubagentCall(h, agent, { prompt: 'task', description: 'task' });
     assert.equal(result.isError, false);
     assert.equal(calls.length, 1);
+  });
+
+  it('toggles specialist-first delegation live on root agents without enabling recursive delegation in children', async (t) => {
+    const h = await NativeHarness.create({ policyV2: mixedPolicy() }, false);
+    t.after(() => h.close());
+    const calls: unknown[] = [];
+    t.after(registerSubagentTool(h, true, calls));
+
+    const root = await h.lead('root-proactive');
+    h.authorize(root);
+
+    // Default passive mode: routing table present, no proactive trigger.
+    const before = await assembledSection(h, root);
+    assert.ok(before);
+    assert.doesNotMatch(before, /Specialist-first delegation/);
+
+    // Flip delegationMode live to specialist-first: takes effect on the very next prompt assembly.
+    h.updatePolicy({ policyV2: mixedPolicy(), delegationMode: 'specialist-first' });
+    const after = await assembledSection(h, root);
+    assert.ok(after);
+    assert.match(after, /Specialist-first delegation is enabled/);
+    assert.match(after, /\(ultrabrain, writing\)/);
+
+    // Spawn a real native child subagent: it keeps passive routing table if authorized, NEVER specialist-first.
+    const child = await h.teammate(root, 'child-worker', 'work');
+    h.authorize(child);
+    const childPrompt = await assembledSection(h, child);
+    assert.ok(childPrompt);
+    assert.match(childPrompt, /Category routes:/);
+    assert.doesNotMatch(childPrompt, /Specialist-first delegation/);
   });
 });

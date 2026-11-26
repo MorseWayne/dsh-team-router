@@ -245,11 +245,15 @@ export class TeamRouter {
     try { authorizedRoutes = this.authorization.stateOf(agent.session); }
     catch { return ''; }
     const parentRoute = parentAgentOptionsForDelegation(agent);
+    const delegationMode = this.configuration.delegationMode.get();
+    let isRoot = agent.session.header.origin !== 'subagent';
+    try { isRoot = isRoot && this.ctx.subagents.rootOf(agent) === agent; }
+    catch { /* keep session header check */ }
     if (toolSupportsModelSelection(this.ctx.tools.get(NATIVE_SUBAGENT_TOOL, agent))) {
-      return buildNativeSubagentGuidance(state.policy, { authorizedRoutes, parentRoute });
+      return buildNativeSubagentGuidance(state.policy, { authorizedRoutes, parentRoute, delegationMode, isRoot });
     }
     if (this.teams.tryMembership(agent)?.role === 'lead') {
-      return buildTeamFallbackGuidance(state.policy, { authorizedRoutes, parentRoute });
+      return buildTeamFallbackGuidance(state.policy, { authorizedRoutes, parentRoute, delegationMode, isRoot: true });
     }
     return '';
   }

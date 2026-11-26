@@ -1,5 +1,7 @@
 import type { CategoryId } from './categories.ts';
 import type { RoutingPolicyV2 } from './routing-policy.ts';
+export type DelegationMode = 'passive' | 'specialist-first';
+export declare function isDelegationMode(value: unknown): value is DelegationMode;
 export interface RoutePair {
     readonly provider: string;
     readonly model: string;
@@ -18,7 +20,18 @@ export interface SessionRouteContext {
     readonly parentRoute?: {
         readonly provider?: string;
         readonly model?: string;
+        readonly reasoningEffort?: string | undefined;
     };
+    /**
+     * Controls whether the prompt proactively encourages delegating matching
+     * specialist deliverables. Defaults to `'passive'`.
+     */
+    readonly delegationMode?: DelegationMode;
+    /**
+     * Only root (top-level) agents receive proactive delegation guidance; child
+     * subagents stay passive to prevent recursive delegation loops. Defaults to `true`.
+     */
+    readonly isRoot?: boolean;
 }
 export interface ResolvedCategoryRoute {
     readonly category: CategoryId;

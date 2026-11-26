@@ -26,7 +26,10 @@ dsh plugin --profile web add dsh-team-router@0.5.0
 ```
 
 - **DSH Web 零配置生效**：DSH Web 官方预设默认开启原生 `subagent` 的选模能力；保存策略时插件自动补齐模型授权，新建会话后插件会向主助手注入当前会话已授权的「类别 → 模型」对照表（可用配置项 `nativeSubagentGuidance: false` 关闭）。
-- **可选严格校验**：如需强制拦截不匹配路由表的原生 `subagent` 调用并提示主助手重填，可在配置中开启 `enforceNativeSubagentRouting: true`（默认关闭）。
+- **委派触发模式（设置页可切换）**：
+  - **被动路由（默认，`delegationMode: "passive"`）**：不干预是否分工，只在主助手决定派生子智能体时套用类别模型。
+  - **专长优先（`delegationMode: "specialist-first"`）**：当任务明显匹配专门类别（视觉工程、深度推理、自主执行、创意探索、文档写作）且目标模型不同于当前会话、非简单问答时，建议主助手主动通过 `subagent` 委派给专长模型并负责验收；仅对主会话生效，不会在子智能体内部递归触发。
+- **可选严格校验（设置页可切换）**：开启 `enforceNativeSubagentRouting: true`（默认关闭）后，将拦截不匹配路由表的原生 `subagent` 调用并提示主助手重填。以上两个开关保存后对下一轮对话立即生效，无需重启。
 - **兼容与兜底**：若宿主未开启原生 `subagent` 选模，插件不会注入选模参数提示；在开启团队协作时，Lead 仍可使用 `team_route_delegate` 按类别委派。停用插件后原生子智能体与团队照常可用，且不会取消已启动的任务。
 
 ## 快速开始

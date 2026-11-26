@@ -52,8 +52,9 @@ describe('native configuration contract', () => {
     assert.equal(config.defaultRoute.get(), undefined);
     assert.equal(Config.dict!.stateDir!.meta.volatile, undefined);
     assert.equal(config.nativeSubagentGuidance.get(), true);
+    assert.equal(config.delegationMode.get(), 'passive');
     assert.equal(config.enforceNativeSubagentRouting.get(), false);
-    for (const name of ['routes', 'rules', 'roles', 'defaultRoute', 'historyLimit', 'nativeSubagentGuidance', 'enforceNativeSubagentRouting']) {
+    for (const name of ['routes', 'rules', 'roles', 'defaultRoute', 'historyLimit', 'nativeSubagentGuidance', 'delegationMode', 'enforceNativeSubagentRouting']) {
       assert.equal(Config.dict![name]!.meta.volatile, true);
     }
     const roundTrip = new Schema(Config.toJSON());
@@ -74,6 +75,7 @@ describe('native configuration contract', () => {
       { ...fixture(), rules: Array.from({ length: 65 }, (_, index) => ({ id: String(index), route: 'fast', keywords: [] })) },
       { ...fixture(), rules: [{ id: 'x', route: 'fast', keywords: [], priority: 0.5 }] },
       { routes: JSON.parse('{"__proto__":{"provider":"offline","model":"x"}}') },
+      { routes: {}, delegationMode: 'aggressive' },
       { routes: {}, stateDir: '  ' },
     ];
     for (const input of invalid) assert.throws(() => Config(input as Parameters<typeof Config>[0]));

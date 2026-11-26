@@ -30,6 +30,8 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     historyLimit: Schema<number, number, "volatile-defined">;
     /** Inject task-category routing guidance into the system prompt (default on). */
     nativeSubagentGuidance: Schema<boolean, boolean, "volatile-defined">;
+    /** Whether the root agent passively routes delegations or proactively delegates distinct specialist tasks. */
+    delegationMode: Schema<"passive" | "specialist-first", "passive" | "specialist-first", "volatile-defined">;
     /** Deny native `subagent` calls that do not match a configured category route (default off). */
     enforceNativeSubagentRouting: Schema<boolean, boolean, "volatile-defined">;
     stateDir: Schema<string, string, "plain">;
@@ -60,6 +62,8 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     historyLimit: Schema<number, number, "volatile-defined">;
     /** Inject task-category routing guidance into the system prompt (default on). */
     nativeSubagentGuidance: Schema<boolean, boolean, "volatile-defined">;
+    /** Whether the root agent passively routes delegations or proactively delegates distinct specialist tasks. */
+    delegationMode: Schema<"passive" | "specialist-first", "passive" | "specialist-first", "volatile-defined">;
     /** Deny native `subagent` calls that do not match a configured category route (default off). */
     enforceNativeSubagentRouting: Schema<boolean, boolean, "volatile-defined">;
     stateDir: Schema<string, string, "plain">;
