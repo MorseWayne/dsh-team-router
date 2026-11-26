@@ -15,7 +15,7 @@
 - 旧成员覆盖工具只保留拒绝入口；关键词和角色映射不再参与运行。
 
 主要实现：
-[分类](<../src/categories.ts>)、[V2 策略](<../src/routing-policy.ts>)、[原生运行](<../src/index.ts>)、[授权](<../src/authorization.ts>)、[状态](<../src/execution-store.ts>)、[设置页](<../src/client.tsx>)。
+[分类](<../src/core/categories.ts>)、[V2 策略](<../src/core/routing-policy.ts>)、[原生运行](<../src/adapter/dsh/runtime.ts>)、[授权](<../src/adapter/dsh/authorization.ts>)、[状态](<../src/core/execution-store.ts>)、[设置页](<../src/ui/client.tsx>)。
 
 ## 已验证
 
@@ -42,6 +42,8 @@ git diff --check: PASS
 覆盖文件：[集成测试](<../test/integration.test.ts>)、[配置持久化](<../test/settings.test.ts>)、[运行核心](<../test/routing-runtime.test.ts>)。
 
 ## 外部 P0：证据与未关闭门禁
+
+> 2026-11-26 更新：外部执行器已移出本项目范围（见 [ARCHITECTURE.md](<ARCHITECTURE.md#范围之外外部执行器>)）。下表保留为调研记录，供独立执行器插件参考；下文「后续验收」第 3、4 项不再由本插件承担。
 
 本机发现的命令不在当前 PATH，但存在于用户本地 bin 目录。已受控执行三家的 `--help`，没有启动推理、登录、修改账号或安装外部运行时。
 

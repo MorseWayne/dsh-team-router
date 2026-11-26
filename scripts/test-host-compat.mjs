@@ -1,12 +1,15 @@
 // Test the shipped bytes, not a rebuild or a workspace link. Usage:
 // node scripts/test-host-compat.mjs 0.2.2-rc.3 /path/to/dsh-team-router.tgz
+// node scripts/test-host-compat.mjs --canary 0.2.3 /path/to/dsh-team-router.tgz
+// Canary mode re-pins only the packed manifest to an undeclared host so the same
+// built code can be probed early. Its result is a warning, never a release gate.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // No checkout dependencies are needed to start the probe. Accept a canonical
@@ -14,9 +17,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const num = '(?:0|[1-9][0-9]*)';
 const pre = `(?:${num}|[0-9]*[a-zA-Z-][a-zA-Z0-9-]*)`;
 const exactVersion = new RegExp(`^${num}\\.${num}\\.${num}(?:-${pre}(?:\\.${pre})*)?(?:\\+[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*)?$`);
-const [host, input, ...extra] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+const canary = argv[0] === '--canary';
+if (canary) argv.shift();
+const [host, input, ...extra] = argv;
 if (!exactVersion.test(host ?? '') || !input || extra.length) {
-  throw new Error('Usage: node scripts/test-host-compat.mjs <exact-host-version> <built.tgz>');
+  throw new Error('Usage: node scripts/test-host-compat.mjs [--canary] <exact-host-version> <built.tgz>');
 }
 const repo = fileURLToPath(new URL('../', import.meta.url));
 const artifact = realpathSync(input);
@@ -28,6 +34,18 @@ const dir = mkdtempSync(join(tempParent, 'team-router-compat-'));
 try {
   const packed = join(dir, 'bundle.tgz');
   copyFileSync(artifact, packed);
+  if (canary) {
+    const stage = join(dir, 'canary');
+    mkdirSync(stage);
+    execFileSync('tar', ['-xzf', packed, '-C', stage]);
+    const file = join(stage, 'package', 'package.json');
+    const repinned = json(file);
+    repinned.engines.dsh = host;
+    for (const name of Object.keys(repinned.peerDependencies)) if (isDsh(name)) repinned.peerDependencies[name] = host;
+    writeFileSync(file, JSON.stringify(repinned, null, 2) + '\n');
+    execFileSync('tar', ['-czf', packed, '-C', stage, 'package']);
+    console.log(`Canary: probing undeclared DSH ${host} with the built code; manifest re-pinned locally only.`);
+  }
   const manifest = JSON.parse(execFileSync('tar', ['-xOzf', packed, 'package/package.json'], { encoding: 'utf8' }));
   assert.equal(manifest.name, pkg);
   const supported = manifest.engines.dsh.split('||').map(s => s.trim());
@@ -94,17 +112,21 @@ try {
   for (const stop of stops.reverse()) stop();
   assert.equal(slots.size, 0);
 
-  // Reuse the full suite without copying src/. Tests normally import ../src/*.ts.
+  // Reuse the full suite without copying src/. Tests import ../src/<layer>/*.ts.
   // Private-module tests forward to the packed JS; the main and published subpaths
   // load via real package exports. Both see exactly the same module instances.
+  // layering.test.ts inspects source files and is meaningless against stubs.
   cpSync(join(repo, 'test'), join(dir, 'test'), { recursive: true });
-  mkdirSync(join(dir, 'src'));
-  const publicModules = { index: pkg, categories: `${pkg}/categories`, policy: `${pkg}/policy`, 'routing-policy': `${pkg}/routing-policy` };
-  for (const file of readdirSync(join(installed, 'lib'))) {
-    if (!file.endsWith('.js') || file === 'client.js') continue;
-    const id = basename(file, '.js');
-    const specifier = publicModules[id] ?? `../node_modules/${pkg}/lib/${file}`;
-    writeFileSync(join(dir, 'src', `${id}.ts`), `export * from ${JSON.stringify(specifier)};\n`);
+  rmSync(join(dir, 'test', 'layering.test.ts'), { force: true });
+  const publicModules = { index: pkg, 'core/categories': `${pkg}/categories`, 'core/policy': `${pkg}/policy`, 'core/routing-policy': `${pkg}/routing-policy` };
+  const libRoot = join(installed, 'lib');
+  for (const rel of readdirSync(libRoot, { recursive: true }).map(String).sort()) {
+    if (!rel.endsWith('.js') || rel === 'client.js') continue;
+    const id = rel.slice(0, -3).split(sep).join('/');
+    const stub = join(dir, 'src', `${id}.ts`);
+    mkdirSync(dirname(stub), { recursive: true });
+    const target = relative(dirname(stub), join(libRoot, rel)).split(sep).join('/');
+    writeFileSync(stub, `export * from ${JSON.stringify(publicModules[id] ?? target)};\n`);
   }
   const tests = readdirSync(join(dir, 'test')).filter(file => file.endsWith('.test.ts')).sort();
   assert.ok(tests.includes('integration.test.ts') && tests.includes('settings.test.ts'));

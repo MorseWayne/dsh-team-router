@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { ModelAuthorizationForm } from '../src/model-grants.ts';
-import { CATEGORY_IDS } from '../src/categories.ts';
-import { createDefaultRoutingPolicy } from '../src/routing-policy.ts';
-import { previewRecommendations } from '../src/recommendations.ts';
-import type { ModelCatalog } from '../src/recommendations.ts';
+import type { ModelAuthorizationForm } from '../src/ui/model-grants.ts';
+import { CATEGORY_IDS } from '../src/core/categories.ts';
+import { createDefaultRoutingPolicy } from '../src/core/routing-policy.ts';
+import { previewRecommendations } from '../src/core/recommendations.ts';
+import type { ModelCatalog } from '../src/core/recommendations.ts';
 import {
   RoutingEditor, routingDraftIssue, routingDraftToPolicy, routingFormPreview, routingPolicyMutations, routingPolicyToDraft,
-} from '../src/routing-editor.ts';
-import type { RoutingForm, RoutingFormSnapshot, RoutingFormValue, RoutingMutation } from '../src/routing-editor.ts';
+} from '../src/ui/routing-editor.ts';
+import type { RoutingForm, RoutingFormSnapshot, RoutingFormValue, RoutingMutation } from '../src/ui/routing-editor.ts';
 
 const available: ModelCatalog = {
   groups: [{ id: 'openai', name: 'OpenAI', models: [

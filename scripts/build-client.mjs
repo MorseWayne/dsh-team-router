@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 
 await build({
-  entryPoints: ['src/client.tsx'],
+  entryPoints: ['src/ui/client.tsx'],
   outfile: 'lib/client.js',
   bundle: true,
   platform: 'browser',

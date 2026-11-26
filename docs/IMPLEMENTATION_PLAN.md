@@ -46,12 +46,12 @@
 
 | 已核对事实 | 依据 | 设计影响 |
 |---|---|---|
-| 配置为 routes、rules、roles、defaultRoute、historyLimit | [配置定义](<../src/config.ts>)、[策略实现](<../src/policy.ts>) | 需要版本化迁移，不是仅隐藏 UI |
-| 决策顺序为手动覆盖 → 关键词 → 精确队友名 → 默认 → 继承 | [策略实现](<../src/policy.ts#L253-L283>) | 新类别解析替换此顺序 |
-| 当前工具主要给已存在原生队友切模型 | [工具与运行时](<../src/index.ts#L178-L242>) | 不能解决外部执行器选择，必须增加委派入口 |
-| 原生成员查询只接纳 continuable 后代及驻留原生 Agent | [团队适配](<../src/native-team.ts>) | 外部执行不能伪装成可通信队友 |
-| 编辑器已有 revision/CAS、草稿保留与配置原子保存能力 | [编辑器](<../src/editor.ts>)、[使用说明](<../README.md#保存与生效>) | 保留可靠保存机制 |
-| 状态文件是 version:1，按 TeamId/SessionId 隔离 | [状态存储](<../src/store.ts>) | 新旧运行记录分版本，不改写旧历史语义 |
+| 配置为 routes、rules、roles、defaultRoute、historyLimit | [配置定义](<../src/adapter/dsh/config.ts>)、[策略实现](<../src/core/policy.ts>) | 需要版本化迁移，不是仅隐藏 UI |
+| 决策顺序为手动覆盖 → 关键词 → 精确队友名 → 默认 → 继承 | [策略实现](<../src/core/policy.ts#L253-L283>) | 新类别解析替换此顺序 |
+| 当前工具主要给已存在原生队友切模型 | [工具与运行时](<../src/adapter/dsh/runtime.ts#L178-L242>) | 不能解决外部执行器选择，必须增加委派入口 |
+| 原生成员查询只接纳 continuable 后代及驻留原生 Agent | [团队适配](<../src/adapter/dsh/native-team.ts>) | 外部执行不能伪装成可通信队友 |
+| 编辑器已有 revision/CAS、草稿保留与配置原子保存能力 | [编辑器](<../src/ui/editor.ts>)、[使用说明](<../README.md#保存与生效>) | 保留可靠保存机制 |
+| 状态文件是 version:1，按 TeamId/SessionId 隔离 | [状态存储](<../src/core/store.ts>) | 新旧运行记录分版本，不改写旧历史语义 |
 
 ### 2.2 安装版 DSH 的实际能力
 
@@ -468,13 +468,13 @@ V1 外部调用是 Lead 管理的子任务执行，不伪造为原生 continuabl
 
 | 现有位置 | 实施调整 |
 |---|---|
-| [policy.ts](<../src/policy.ts>) | 增加 V2 精确校验与类别解析；移除新模式下关键词/角色决策 |
-| [config.ts](<../src/config.ts>) | policyV2 原子字段、迁移状态、Host 校验；保持 stateDir 非界面可写 |
-| [editor.ts](<../src/editor.ts>) | 固定七类草稿、目标联合类型、推荐预览、CAS 和冲突保护 |
-| [client.tsx](<../src/client.tsx>) | 新页面、按执行器目录联动、删除规则与角色区域 |
-| [index.ts](<../src/index.ts>) | 路由委派工具、目录服务接线、生命周期关联；不再任务关键词重选模型 |
-| [native-team.ts](<../src/native-team.ts>) | 保持原生成员识别，外部执行独立展示，不扩大 continuable 语义 |
-| [store.ts](<../src/store.ts>) | V2 路由审计、旧状态只读、迁移与恢复元数据 |
+| [policy.ts](<../src/core/policy.ts>) | 增加 V2 精确校验与类别解析；移除新模式下关键词/角色决策 |
+| [config.ts](<../src/adapter/dsh/config.ts>) | policyV2 原子字段、迁移状态、Host 校验；保持 stateDir 非界面可写 |
+| [editor.ts](<../src/ui/editor.ts>) | 固定七类草稿、目标联合类型、推荐预览、CAS 和冲突保护 |
+| [client.tsx](<../src/ui/client.tsx>) | 新页面、按执行器目录联动、删除规则与角色区域 |
+| [index.ts](<../src/adapter/dsh/runtime.ts>) | 路由委派工具、目录服务接线、生命周期关联；不再任务关键词重选模型 |
+| [native-team.ts](<../src/adapter/dsh/native-team.ts>) | 保持原生成员识别，外部执行独立展示，不扩大 continuable 语义 |
+| [store.ts](<../src/core/store.ts>) | V2 路由审计、旧状态只读、迁移与恢复元数据 |
 | [README.md](<../README.md>)、[配置示例](<../examples/router.patch.yml>) | 更新范围、七分类、外部能力限制、授权与迁移说明 |
 | [package.json](<../package.json>) | 保持精确 DSH 兼容范围；加入实际需要的依赖与最终方案文档发布清单 |
 

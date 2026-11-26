@@ -26,11 +26,11 @@ import { ToolsService } from '@deepseek-ai/dsh-tools';
 import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory';
 import * as router from '../src/index.ts';
-import { NativeTeams } from '../src/native-team.ts';
-import type { Config as EffectiveRouterConfig } from '../src/config.ts';
-import type { RouterConfig } from '../src/policy.ts';
-import type { RoutingPolicyV2, Target } from '../src/routing-policy.ts';
-import type { ExecutionRecord } from '../src/execution-store.ts';
+import { NativeTeams } from '../src/adapter/dsh/native-team.ts';
+import type { Config as EffectiveRouterConfig } from '../src/adapter/dsh/config.ts';
+import type { RouterConfig } from '../src/core/policy.ts';
+import type { RoutingPolicyV2, Target } from '../src/core/routing-policy.ts';
+import type { ExecutionRecord } from '../src/core/execution-store.ts';
 
 // Same released log-only event used by dsh-tool-subagent's user-controlled opt-in.
 // The harness appends through Session (never mutates the router's projection).

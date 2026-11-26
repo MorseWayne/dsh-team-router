@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseConfig } from '../src/policy.ts';
-import { PolicyEditor, draftToPolicy, draftValidationIssue, policyRequiresCatalog, policyToDraft, policyMutations, resetMutations, moveRule, rowKey } from '../src/editor.ts';
-import type { EditorDraft, EditorForm, EditorMutation, FormSnapshot, ValidationField, ValidationReason } from '../src/editor.ts';
+import { parseConfig } from '../src/core/policy.ts';
+import { PolicyEditor, draftToPolicy, draftValidationIssue, policyRequiresCatalog, policyToDraft, policyMutations, resetMutations, moveRule, rowKey } from '../src/ui/editor.ts';
+import type { EditorDraft, EditorForm, EditorMutation, FormSnapshot, ValidationField, ValidationReason } from '../src/ui/editor.ts';
 
 const policy = () => parseConfig({ routes: { quick: { provider: 'test', model: 'fast' } }, rules: [{ id: 'review', keywords: ['review'], route: 'quick', priority: 1 }], roles: { reviewer: 'quick' }, defaultRoute: 'quick' });
 class Form implements EditorForm {

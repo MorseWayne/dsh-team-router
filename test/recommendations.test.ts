@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { CATEGORY_IDS } from '../src/categories.ts';
-import { createDefaultRoutingPolicy } from '../src/routing-policy.ts';
-import { RECOMMENDATION_CANDIDATES, RECOMMENDATION_VERSION, previewRecommendations, routingPolicyFingerprint } from '../src/recommendations.ts';
-import type { ModelCatalog } from '../src/recommendations.ts';
+import { CATEGORY_IDS } from '../src/core/categories.ts';
+import { createDefaultRoutingPolicy } from '../src/core/routing-policy.ts';
+import { RECOMMENDATION_CANDIDATES, RECOMMENDATION_VERSION, previewRecommendations, routingPolicyFingerprint } from '../src/core/recommendations.ts';
+import type { ModelCatalog } from '../src/core/recommendations.ts';
 
 function catalog(): ModelCatalog {
   return {

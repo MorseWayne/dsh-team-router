@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
-import { authorizationProjection, assertAuthorizedRoute } from '../src/authorization.ts';
-import { ExecutionStore, policyDigest } from '../src/execution-store.ts';
-import { previewMigration } from '../src/migration.ts';
-import { Config, readRoutingState, requireRoutingPolicy, installConfigValidation } from '../src/config.ts';
-import { createDefaultRoutingPolicy } from '../src/routing-policy.ts';
+import { authorizationProjection, assertAuthorizedRoute } from '../src/adapter/dsh/authorization.ts';
+import { ExecutionStore, policyDigest } from '../src/core/execution-store.ts';
+import { previewMigration } from '../src/core/migration.ts';
+import { Config, readRoutingState, requireRoutingPolicy, installConfigValidation } from '../src/adapter/dsh/config.ts';
+import { createDefaultRoutingPolicy } from '../src/core/routing-policy.ts';
 import type { SessionEvent } from '@deepseek-ai/dsh-session';
 
 const legacy = () => ({ routes: { quick: { provider: 'offline', model: 'fast' } }, rules: [{ id: 'old', keywords: ['fix'], route: 'quick' }], roles: { worker: 'quick' }, defaultRoute: 'quick' });

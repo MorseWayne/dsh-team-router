@@ -1,0 +1,77 @@
+name: DSH host canary
+
+# Early warning only: probes the newest published DSH host with the current main
+# build. It never publishes and never gates a release; see docs/ARCHITECTURE.md.
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+    inputs:
+      host:
+        description: 'Exact DSH version to probe (default: newest of the latest/next dist-tags)'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-canary
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.x'
+          package-manager-cache: false
+      - name: Install locked dependencies from npm
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org/ --replace-registry-host=always
+      - name: Resolve the host version to probe
+        id: host
+        env:
+          REQUESTED: ${{ inputs.host }}
+        run: |
+          set -eu
+          tags=$(npm view @deepseek-ai/dsh-app-boot dist-tags --json --registry=https://registry.npmjs.org/)
+          TAGS="$tags" node --input-type=commonjs <<'NODE'
+          const semver = require('semver');
+          const { engines } = require('./package.json');
+          const declared = engines.dsh.split('||').map(v => v.trim());
+          const requested = process.env.REQUESTED?.trim();
+          const tags = JSON.parse(process.env.TAGS);
+          const host = requested || semver.rsort([tags.latest, tags.next].filter(v => semver.valid(v)))[0];
+          if (!semver.valid(host)) throw new Error(`No exact host version resolved: ${host}`);
+          const mode = declared.includes(host) ? 'declared' : 'canary';
+          console.log(`Probing DSH ${host} (${mode}); declared: ${declared.join(', ')}`);
+          require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT, `version=${host}\nmode=${mode}\n`);
+          NODE
+      - name: Typecheck, test and build
+        run: npm run check
+      - name: Pack
+        run: npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+      - name: Test the packed plugin on the probed host
+        env:
+          HOST: ${{ steps.host.outputs.version }}
+          MODE: ${{ steps.host.outputs.mode }}
+        run: |
+          set -eu
+          flag=""; [ "$MODE" = canary ] && flag="--canary"
+          node scripts/test-host-compat.mjs $flag "$HOST" "$RUNNER_TEMP"/dsh-team-router-*.tgz
+      - name: Summarize
+        if: always()
+        env:
+          HOST: ${{ steps.host.outputs.version }}
+          MODE: ${{ steps.host.outputs.mode }}
+          OUTCOME: ${{ job.status }}
+        run: |
+          {
+            echo "### DSH host canary: $HOST ($MODE) → $OUTCOME"
+            echo
+            echo "A failure here is an early warning, not a release blocker. Check the 🔴 touchpoints in docs/ARCHITECTURE.md first."
+          } >> "$GITHUB_STEP_SUMMARY"

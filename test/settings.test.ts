@@ -10,9 +10,9 @@ import { boot, readProfilePatches } from '@deepseek-ai/dsh-app-boot';
 import type { ProfileContext } from '@deepseek-ai/dsh-app-boot';
 import { ConfigEditor } from '@deepseek-ai/dsh-config-editor';
 import { SettingsConflictError, SettingsForms } from '@deepseek-ai/dsh-settings';
-import { Config, installConfigValidation, readPolicy, readRoutingState } from '../src/config.ts';
-import { createDefaultRoutingPolicy } from '../src/routing-policy.ts';
-import { ExecutionStore } from '../src/execution-store.ts';
+import { Config, installConfigValidation, readPolicy, readRoutingState } from '../src/adapter/dsh/config.ts';
+import { createDefaultRoutingPolicy } from '../src/core/routing-policy.ts';
+import { ExecutionStore } from '../src/core/execution-store.ts';
 
 const namespace = 'team-router-policy-test';
 const model = (id: string) => ({ provider: 'offline', model: id });

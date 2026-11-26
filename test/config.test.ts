@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { Context } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
-import { Config, installConfigValidation, readPolicy, resolvePolicy } from '../src/config.ts';
-import { parseConfig } from '../src/policy.ts';
+import { Config, installConfigValidation, readPolicy, resolvePolicy } from '../src/adapter/dsh/config.ts';
+import { parseConfig } from '../src/core/policy.ts';
 
 const route = { provider: 'offline', model: 'fast' };
 const fixture = () => ({

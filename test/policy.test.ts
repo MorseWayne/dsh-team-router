@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { decide, parseConfig } from '../src/policy.ts';
-import type { NormalizedConfig, Route, RouterConfig } from '../src/policy.ts';
+import { decide, parseConfig } from '../src/core/policy.ts';
+import type { NormalizedConfig, Route, RouterConfig } from '../src/core/policy.ts';
 
 const route = (model: string): Route => ({ provider: 'test-provider', model });
 

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, statSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { StateStore } from '../src/store.ts';
-import type { TeamState } from '../src/store.ts';
+import { StateStore } from '../src/core/store.ts';
+import type { TeamState } from '../src/core/store.ts';
 
 const base = { provider: 'offline', model: 'strong', reasoningEffort: 'high' };
 function fixture(t: TestContext) {

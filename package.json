@@ -15,9 +15,9 @@
   "types": "lib/index.d.ts",
   "exports": {
     ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
-    "./policy": { "types": "./lib/policy.d.ts", "default": "./lib/policy.js" },
-    "./routing-policy": { "types": "./lib/routing-policy.d.ts", "default": "./lib/routing-policy.js" },
-    "./categories": { "types": "./lib/categories.d.ts", "default": "./lib/categories.js" },
+    "./policy": { "types": "./lib/core/policy.d.ts", "default": "./lib/core/policy.js" },
+    "./routing-policy": { "types": "./lib/core/routing-policy.d.ts", "default": "./lib/core/routing-policy.js" },
+    "./categories": { "types": "./lib/core/categories.d.ts", "default": "./lib/core/categories.js" },
     "./client": "./lib/client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg",
@@ -34,7 +34,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/build-client.mjs",
+    "build": "node scripts/clean.mjs && tsc -p tsconfig.json && node scripts/build-client.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --experimental-strip-types --test test/*.test.ts",
     "check": "npm run typecheck && npm test && npm run build"

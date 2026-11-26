@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { CODEX_SUBAGENT, readGrantEvidence, type InventoryReader } from '../src/grant-diagnostics.ts';
-import { MODEL_AUTHORIZATION_ENTRY, planModelGrant } from '../src/model-grants.ts';
+import { CODEX_SUBAGENT, readGrantEvidence, type InventoryReader } from '../src/ui/grant-diagnostics.ts';
+import { MODEL_AUTHORIZATION_ENTRY, planModelGrant } from '../src/ui/model-grants.ts';
 
 const row = {entryId: `include:${MODEL_AUTHORIZATION_ENTRY}`, moduleName: '@deepseek-ai/dsh-tool-subagent/model-selection-settings', enabled: false, fiberPhase: null};
 const mismatch = {name: CODEX_SUBAGENT, installed: true, version: '0.2.2-rc.3', installTarget: {version: '0.2.2-rc.5'}, error: {code: 'incompatible-version', incompatible: [{name: CODEX_SUBAGENT, version: '0.2.2-rc.3', runtimeVersion: '0.2.2-rc.5'}]}};

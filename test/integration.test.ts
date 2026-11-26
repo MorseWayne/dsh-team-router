@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { NativeHarness, config, explicitTarget, route, safePolicy } from './helpers.ts';
-import type { RoutingPolicyV2 } from '../src/routing-policy.ts';
+import type { RoutingPolicyV2 } from '../src/core/routing-policy.ts';
 import { LLM_FAILURE_CODES, LlmError } from '@deepseek-ai/dsh-llm';
 import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
-import { ExecutionStore } from '../src/execution-store.ts';
+import { ExecutionStore } from '../src/core/execution-store.ts';
 
 // Real Cordis services, AgentLoop, Session events, Teams and native subagents;
 // only LLM transport is offline. Never executes an external CLI or network call.

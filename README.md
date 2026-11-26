@@ -1,6 +1,6 @@
 # dsh-team-router
 
-给 DSH 原生队友按任务类别选模型。`dsh-team-router@0.4.0` 的同一个安装包支持 DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**，需要 Node.js 24+。更新的宿主版本通过兼容测试后再加入，不需要开启版本豁免。当前仅支持原生队友，Codex、agy、Cursor 外部 Agent 执行尚未开放。
+给 DSH 原生队友按任务类别选模型。`dsh-team-router@0.4.0` 的同一个安装包支持 DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**，需要 Node.js 24+。更新的宿主版本通过兼容测试后再加入，不需要开启版本豁免。本插件只增强 DSH 原生团队；Codex、agy、Cursor 等外部 Agent 的执行**不在本项目范围内**，应由独立的 DSH 执行器插件接入，接入后出现在模型目录中即可被路由（见[架构说明](<docs/ARCHITECTURE.md#范围之外外部执行器>)）。
 
 ## 安装
 
@@ -62,10 +62,12 @@ Lead 判断是否分工
 
 运行 `npm ci --ignore-scripts` 安装依赖，`npm run check` 执行类型检查、测试和构建，`npm pack --ignore-scripts` 生成安装包。
 
+源码分三层：`src/core`（与宿主无关的类别与策略）、`src/adapter/dsh`（DSH 运行时接线）、`src/ui`（设置页）。DSH 升级时只应修改 `adapter`，`test/layering.test.ts` 会拦截越层引用。宿主触点清单与稳定度见 [架构说明](<docs/ARCHITECTURE.md>)，希望 DSH 提供的正式扩展点见 [上游提案](<docs/UPSTREAM_PROPOSAL.md>)。
+
 [V2 配置示例](<examples/router.patch.yml>) · [实施方案](<docs/IMPLEMENTATION_PLAN.md>) · [验证记录与外部执行器限制](<docs/IMPLEMENTATION_STATUS.md>) · [MIT 许可证](<LICENSE>)
 
 ## 维护者发布
 
-[GitHub Actions](<.github/workflows/publish.yml>) 在面向 `main` 的 PR 和 `main` 推送上检查，不发布。CI 只构建一次，在 `engines.dsh` 列出的每个宿主版本上独立安装并验证同一个包；任一项失败即不发布。推送与包清单、锁文件一致的 `vX.Y.Z` 稳定版标签，且提交已在 `main` 时，CI 才把验证过的安装包发布到 npm `latest`。
+[GitHub Actions](<.github/workflows/publish.yml>) 在面向 `main` 的 PR 和 `main` 推送上检查，不发布。CI 只构建一次，在 `engines.dsh` 列出的每个宿主版本上独立安装并验证同一个包；任一项失败即不发布。另有每日运行的 [宿主预警](<.github/workflows/host-canary.yml>)，用同一份构建对 npm 上最新的 DSH 版本跑完整测试，只预警，不影响发布。推送与包清单、锁文件一致的 `vX.Y.Z` 稳定版标签，且提交已在 `main` 时，CI 才把验证过的安装包发布到 npm `latest`。
 
 首次需由包维护者在 [npm 包设置](https://www.npmjs.com/package/dsh-team-router/access) 添加 GitHub Actions Trusted Publisher：仓库 `MorseWayne/dsh-team-router`、工作流 `publish.yml`、Environment 留空，允许 **Publish**。不需要 `NPM_TOKEN`。之后在干净、已同步的 `main` 上运行 `npm version patch`（或 `minor` / `major`），再运行 `git push --atomic origin main "$(git describe --tags --exact-match HEAD)"`，即可触发发布。

@@ -2,11 +2,11 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   CATEGORIES, CATEGORY_IDS, CATEGORY_LIST, categorySelectionGuidance, getCategory, isCategoryId,
-} from '../src/categories.ts';
+} from '../src/core/categories.ts';
 import {
   createDefaultRoutingPolicy, parseRoutingPolicy, parseTarget, resolveRoutingSnapshot,
-} from '../src/routing-policy.ts';
-import type { Target } from '../src/routing-policy.ts';
+} from '../src/core/routing-policy.ts';
+import type { Target } from '../src/core/routing-policy.ts';
 
 const native = (id = 'native-model'): Target => ({
   executor: 'native', model: { mode: 'explicit', provider: 'provider', id },
