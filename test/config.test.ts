@@ -51,7 +51,9 @@ describe('native configuration contract', () => {
     assert.deepEqual(config.unknownStaticField, { keep: true });
     assert.equal(config.defaultRoute.get(), undefined);
     assert.equal(Config.dict!.stateDir!.meta.volatile, undefined);
-    for (const name of ['routes', 'rules', 'roles', 'defaultRoute', 'historyLimit']) {
+    assert.equal(config.nativeSubagentGuidance.get(), true);
+    assert.equal(config.enforceNativeSubagentRouting.get(), false);
+    for (const name of ['routes', 'rules', 'roles', 'defaultRoute', 'historyLimit', 'nativeSubagentGuidance', 'enforceNativeSubagentRouting']) {
       assert.equal(Config.dict![name]!.meta.volatile, true);
     }
     const roundTrip = new Schema(Config.toJSON());

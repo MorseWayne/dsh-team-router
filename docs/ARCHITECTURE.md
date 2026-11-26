@@ -1,14 +1,16 @@
 # 架构与宿主触点
 
-本插件的定位：**DSH 原生 Agent Teams 的增强插件**，只负责「任务类别 → 模型」的选择。是否分工、子智能体生命周期、权限与授权仍由 DSH 原生负责。
+本插件的定位：**DSH 原生子智能体与 Agent Teams 的分类选模增强插件**，只负责「任务类别 → 模型」的选择。是否分工、子智能体生命周期、权限与授权仍由 DSH 原生负责。
+
+在 DSH Web（原生 `subagent` 工具默认开启 `modelSelection: true`）环境下，插件通过系统提示引导主助手直接给原生 `subagent` 传对应模型参数，**无需开启团队协作即可生效**；在未开启 `modelSelection` 的宿主环境下，不注入原生选模提示，团队模式下继续由 `team_route_delegate` 兜底。
 
 ## 分层
 
 ```text
 src/
 ├─ index.ts          Cordis 入口，仅 re-export adapter/dsh/runtime
-├─ core/             与宿主无关：类别、V2 策略、旧策略迁移、推荐、委派参数校验、审计存储
-├─ adapter/dsh/      DSH 运行时接线：团队识别、授权、配置校验、子智能体启动、工具注册
+├─ core/             与宿主无关：类别、V2 策略、旧策略迁移、推荐、委派与原生 subagent 路由/校验、审计存储
+├─ adapter/dsh/      DSH 运行时接线：团队识别、授权、配置校验、系统提示与 pre-execute 钩子、子智能体启动、工具注册
 └─ ui/               设置页（DSH Web 客户端插件）及其纯状态逻辑
 ```
 
@@ -37,6 +39,8 @@ src/
 | T9 | `agent/created`、`subagent/start`、`agent/disposed`、`session/event` 事件与工具注册 | runtime.ts | 🟢 | 上游提案 §2 可删掉专用委派工具 |
 | T10 | `session.requestHeader().config`，用于报告实际模型 | runtime.ts | 🟡 | — |
 | T11 | 客户端：`configForms` 中的 `subagent-model-selection-settings` 表单、`plugins.bundle.config`/`settings.section` 插槽、`remote.pluginManager`/`remote.settings` | [client.tsx](<../src/ui/client.tsx>)、[model-grants.ts](<../src/ui/model-grants.ts>) | 🟡 | 上游提案 §1 后可只读 |
+| T12 | 可选依赖 `systemPrompt.section`（`order: getSectionOrder('TEAM_POLICY') + 1`、`interpolate: false`）、`tools.get('subagent', agent)` 检查原生选模参数 | runtime.ts | 🟡 | 上游提案 §2 后可简化 |
+| T13 | `tools/pre-execute` 瀑布钩子（仅在 `enforceNativeSubagentRouting: true` 时拒绝不匹配的原生 `subagent` 调用） | runtime.ts | 🟢 | 上游提案 §2 后可删除 |
 
 🔴 项是升级时最容易「静默失效」的地方，每次加入新宿主版本都应优先人工核对。
 

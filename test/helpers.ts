@@ -47,7 +47,10 @@ export const explicitTarget = (model: string, reasoningEffort?: string): Target 
   executor: 'native', model: { mode: 'explicit', provider: 'offline', id: model,
     ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
 });
-type HarnessConfig = RouterConfig | { policyV2: RoutingPolicyV2 };
+type HarnessConfig = (RouterConfig | { policyV2: RoutingPolicyV2 }) & {
+  nativeSubagentGuidance?: boolean;
+  enforceNativeSubagentRouting?: boolean;
+};
 
 export const text = (value: string): ContentBlock[] => [{ type: 'text', text: value }];
 export const route = (model: string, reasoningEffort?: string) => ({
@@ -216,7 +219,7 @@ export class NativeHarness {
     const active = fiber.effectiveConfig as EffectiveRouterConfig;
     const candidate = fiber.resolveConfig({ ...policy, stateDir: active.stateDir }) as EffectiveRouterConfig;
     assert.equal(candidate.stateDir, active.stateDir, 'This helper only commits live policy fields');
-    for (const key of ['policyV2', 'routes', 'rules', 'roles', 'defaultRoute', 'historyLimit'] as const) {
+    for (const key of ['policyV2', 'routes', 'rules', 'roles', 'defaultRoute', 'historyLimit', 'nativeSubagentGuidance', 'enforceNativeSubagentRouting'] as const) {
       updateVolatile(active[key], candidate[key]);
     }
     assert.equal(fiber.effectiveConfig, active, 'Live updates retain the native effective config references');

@@ -21,6 +21,7 @@ export declare class TeamRouter {
     private delegate;
     private install;
     private release;
+    private renderPromptGuidance;
     start(): Promise<void>;
     stop(): void;
 }

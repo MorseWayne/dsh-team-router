@@ -52,10 +52,12 @@
     "@deepseek-ai/dsh-tools": "0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5",
     "@deepseek-ai/dsh-subagent": "0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5",
     "@deepseek-ai/schemastery": "~3.19.0",
-    "@deepseek-ai/dsh-settings": "0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5"
+    "@deepseek-ai/dsh-settings": "0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5",
+    "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-settings": { "optional": true }
+    "@deepseek-ai/dsh-settings": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true }
   },
   "devDependencies": {
     "@deepseek-ai/cosmokit": "~1.9.0",

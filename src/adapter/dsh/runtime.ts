@@ -1,6 +1,6 @@
 /**
  * DSH host adapter: the ONLY place that wires routing onto DSH runtime services.
- * Every host touchpoint used here is inventoried in docs/ARCHITECTURE.md (T1–T11).
+ * Every host touchpoint used here is inventoried in docs/ARCHITECTURE.md (T1–T13).
  * Host-agnostic rules (validation, prompts, outcome mapping) live in core/.
  */
 import { homedir } from 'node:os';
@@ -13,12 +13,15 @@ import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection';
 import { parentAgentOptionsForDelegation } from '@deepseek-ai/dsh-subagent';
 import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
 import type {} from '@deepseek-ai/dsh-settings';
+import type {} from '@deepseek-ai/dsh-system-prompt';
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import type { ToolSchema } from '@deepseek-ai/dsh-llm';
 import { NativeTeams } from './native-team.ts';
 import { Config, installConfigValidation, readRoutingState, requireRoutingPolicy } from './config.ts';
 import { CATEGORY_IDS, categorySelectionGuidance } from '../../core/categories.ts';
 import { DIAGNOSTICS, EXTERNAL_GATES, buildCategoryPrompt, outcomeState, validateDelegateArgs } from '../../core/delegation.ts';
 import type { DelegateArgs } from '../../core/delegation.ts';
+import { buildNativeSubagentGuidance, buildTeamFallbackGuidance, validateNativeSubagentCall } from '../../core/native-subagent.ts';
 import { resolveRoutingSnapshot } from '../../core/routing-policy.ts';
 import { authorizationProjection, assertAuthorizedRoute } from './authorization.ts';
 import type { AuthorizedRoute } from './authorization.ts';
@@ -28,6 +31,15 @@ export { EXTERNAL_GATES } from '../../core/delegation.ts';
 
 export const name = 'team-router';
 export const inject = ['agents', 'agentTeams', 'subagents', 'tools', 'llm', 'sessionProjections'];
+
+const NATIVE_SUBAGENT_TOOL = 'subagent';
+const FALLBACK_SECTION_ORDER = 601;
+
+function toolSupportsModelSelection(definition: Pick<ToolSchema, 'parameters'> | undefined): boolean {
+  const properties = definition?.parameters?.properties;
+  if (typeof properties !== 'object' || properties === null) return false;
+  return Object.hasOwn(properties, 'provider') && Object.hasOwn(properties, 'model');
+}
 
 interface ActiveExecution { teamId: string; id: string; activation: SubagentActivation; historyLimit: number }
 
@@ -222,8 +234,55 @@ export class TeamRouter {
     for (const dispose of this.registrations.get(agent) ?? []) dispose();
     this.registrations.delete(agent);
   }
+  private renderPromptGuidance(agent: Agent | undefined): string {
+    if (this.stopped || agent === undefined || this.ctx.agents.get(agent.id) !== agent) return '';
+    if (!this.configuration.nativeSubagentGuidance.get()) return '';
+    let state: ReturnType<typeof readRoutingState>;
+    try { state = readRoutingState(this.configuration); }
+    catch { return ''; }
+    if (state.migrationRequired) return '';
+    let authorizedRoutes: AuthorizedRoute[] | null;
+    try { authorizedRoutes = this.authorization.stateOf(agent.session); }
+    catch { return ''; }
+    const parentRoute = parentAgentOptionsForDelegation(agent);
+    if (toolSupportsModelSelection(this.ctx.tools.get(NATIVE_SUBAGENT_TOOL, agent))) {
+      return buildNativeSubagentGuidance(state.policy, { authorizedRoutes, parentRoute });
+    }
+    if (this.teams.tryMembership(agent)?.role === 'lead') {
+      return buildTeamFallbackGuidance(state.policy, { authorizedRoutes, parentRoute });
+    }
+    return '';
+  }
   async start(): Promise<void> {
     this.authorization = await this.ctx.sessionProjections.register(authorizationProjection);
+    this.ctx.inject(['systemPrompt'], child => {
+      let order = FALLBACK_SECTION_ORDER;
+      try { order = child.systemPrompt.getSectionOrder('TEAM_POLICY') + 1; }
+      catch { order = FALLBACK_SECTION_ORDER; }
+      child.effect(() => child.systemPrompt.section({
+        name: 'team-router:policy',
+        order,
+        interpolate: false,
+        text: ({ agent }) => this.renderPromptGuidance(agent),
+      }), 'teamRouter.systemPrompt');
+    });
+    this.ctx.on('tools/pre-execute', (exec, next) => {
+      if (this.stopped || exec.name !== NATIVE_SUBAGENT_TOOL || !this.configuration.enforceNativeSubagentRouting.get()) return next();
+      const agent = exec.agent;
+      if (agent === undefined || this.ctx.agents.get(agent.id) !== agent) return next();
+      if (!toolSupportsModelSelection(this.ctx.tools.get(NATIVE_SUBAGENT_TOOL, agent, exec.toolSet))) return next();
+      let state: ReturnType<typeof readRoutingState>;
+      try { state = readRoutingState(this.configuration); }
+      catch { return next(); }
+      if (state.migrationRequired) return next();
+      let authorizedRoutes: AuthorizedRoute[] | null;
+      try { authorizedRoutes = this.authorization.stateOf(agent.session); }
+      catch { return next(); }
+      const parentRoute = parentAgentOptionsForDelegation(agent);
+      const verdict = validateNativeSubagentCall(state.policy, exec.arguments, { authorizedRoutes, parentRoute });
+      if (!verdict.ok) return Promise.resolve({ kind: 'deny', reason: verdict.reason });
+      return next();
+    });
     this.ctx.on('agent/created', ({ agent }) => { this.install(agent); return undefined; });
     this.ctx.on('subagent/start', info => { const agent = this.ctx.agents.get(info.id); if (agent) this.install(agent); });
     this.ctx.on('agent/disposed', ({ agent }) => this.release(agent));

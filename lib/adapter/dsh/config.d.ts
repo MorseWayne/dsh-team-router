@@ -28,6 +28,10 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     roles: Schema<NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, "volatile-defined">;
     defaultRoute: Schema<string | null, string | null, "volatile">;
     historyLimit: Schema<number, number, "volatile-defined">;
+    /** Inject task-category routing guidance into the system prompt (default on). */
+    nativeSubagentGuidance: Schema<boolean, boolean, "volatile-defined">;
+    /** Deny native `subagent` calls that do not match a configured category route (default off). */
+    enforceNativeSubagentRouting: Schema<boolean, boolean, "volatile-defined">;
     stateDir: Schema<string, string, "plain">;
 }>>, Schemastery.ObjectT<NoInfer<{
     policyV2: Schema<any, any, "volatile">;
@@ -54,6 +58,10 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     roles: Schema<NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, "volatile-defined">;
     defaultRoute: Schema<string | null, string | null, "volatile">;
     historyLimit: Schema<number, number, "volatile-defined">;
+    /** Inject task-category routing guidance into the system prompt (default on). */
+    nativeSubagentGuidance: Schema<boolean, boolean, "volatile-defined">;
+    /** Deny native `subagent` calls that do not match a configured category route (default off). */
+    enforceNativeSubagentRouting: Schema<boolean, boolean, "volatile-defined">;
     stateDir: Schema<string, string, "plain">;
 }>>, "plain">;
 export type Config = ReturnType<typeof Config>;

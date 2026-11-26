@@ -29,6 +29,10 @@ export const Config = Schema.object({
   // Explicit null masks a default inherited from a lower configuration layer.
   defaultRoute: Schema.union([safeRouteName(), Schema.const(null)]).volatile(),
   historyLimit: Schema.number().min(1).max(1000).step(1).default(100).volatile(),
+  /** Inject task-category routing guidance into the system prompt (default on). */
+  nativeSubagentGuidance: Schema.boolean().default(true).volatile(),
+  /** Deny native `subagent` calls that do not match a configured category route (default off). */
+  enforceNativeSubagentRouting: Schema.boolean().default(false).volatile(),
   stateDir: text(),
 });
 export type Config = ReturnType<typeof Config>;
