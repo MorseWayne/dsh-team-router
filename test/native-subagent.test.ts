@@ -69,6 +69,25 @@ describe('core session routing plans', () => {
     assert.equal(validateNativeSubagentCall(allInherit, call('unconfigured')).ok, true);
   });
 
+  it('only suggests an optional scout evidence pack when scout itself is a specialist', () => {
+    const config = mixed({ delegationMode: 'specialist-first' });
+    config.builtins.scout = { enabled: true, binding: explicitTarget('fast', 'low') };
+    const session = { isRoot: true, parentRoute: route('fast', 'high'), authorizedRoutes: [authorized('fast'), authorized('review')] };
+    const renderers = [buildNativeSubagentGuidance, buildNativeSubagentReminder, buildTeamFallbackGuidance];
+    for (const render of renderers) {
+      const hint = /Read one known item directly\..*scout may gather a reviewable read-only evidence pack.*owner handles it end to end/;
+      assert.match(render(config, session), hint);
+      for (const context of [{ ...session, isRoot: false }, { ...session, parentRoute: route('fast', 'low') },
+        { ...session, authorizedRoutes: [authorized('review')] }]) assert.doesNotMatch(render(config, context), /scout may gather/);
+      for (const behavior of [{ ...config.behavior, guidance: false }, { ...config.behavior, delegationMode: 'passive' as const }]) {
+        assert.doesNotMatch(render({ ...config, behavior }, session), /scout may gather/);
+      }
+      for (const scout of [{ enabled: false, binding: explicitTarget('fast', 'low') }, { enabled: true }]) {
+        assert.doesNotMatch(render({ ...config, builtins: { ...config.builtins, scout } }, session), /scout may gather/);
+      }
+    }
+  });
+
   it('does not advertise denied tuples and toggles proactive advice with config, root and tuple', () => {
     const config = mixed({ delegationMode: 'specialist-first' });
     const session = { isRoot: true, parentRoute: route('review', 'high'), authorizedRoutes: [authorized('review')] };
@@ -120,6 +139,27 @@ async function tool(h: NativeHarness, agent: Agent, args: Record<string, unknown
 }
 
 describe('native subagent routing integration', { concurrency: false, timeout: 30_000 }, () => {
+  it('preserves classic7 and both strict extremes for literal pre-scout V3 settings', async t => {
+    // Deliberately not derived from the current registry: this is the 1.0.0 on-disk ID set.
+    const oldIds = ['visual-engineering', 'frontend-engineering', 'backend-data', 'deep', 'debugging', 'code-review',
+      'verification-automation', 'ultrabrain', 'artistry', 'writing', 'quick', 'unspecified'];
+    const classic = ['visual-engineering', 'deep', 'ultrabrain', 'artistry', 'writing', 'quick', 'unspecified'];
+    const config: RoutingConfig = { version: 3, defaultTarget: { mode: 'inherit' },
+      behavior: { guidance: true, delegationMode: 'passive', strict: true }, custom: [], historyLimit: 100,
+      builtins: Object.fromEntries(oldIds.filter(id => !classic.includes(id)).map(id => [id, { enabled: false }])) };
+    const h = await NativeHarness.create({ routing: config }); t.after(() => h.close());
+    t.after(registerSubagentTool(h, true, []));
+    const root = await h.lead('old-v3'); h.authorize(root);
+    assert.deepEqual((await h.status(root)).categories.map(c => c.id), classic);
+    config.builtins = Object.fromEntries(oldIds.map(id => [id, { enabled: false }])); h.updatePolicy({ routing: config });
+    assert.deepEqual((await h.status(root)).categories, []);
+    assert.equal((await tool(h, root, call('unconfigured'), 'legacy-off')).isError, false);
+    config.builtins = Object.fromEntries(oldIds.map(id => [id, { binding: explicitTarget('fast') }])); h.updatePolicy({ routing: config });
+    assert.deepEqual((await h.status(root)).categories.map(c => c.id), oldIds);
+    assert.equal((await tool(h, root, {}, 'legacy-omit')).isError, true);
+    assert.equal((await tool(h, root, call('fast'), 'legacy-match')).isError, false);
+  });
+
   it('injects authorized guidance in a regular session and updates it live', async t => {
     const h = await NativeHarness.create({ routing: mixed() }, false); t.after(() => h.close());
     t.after(registerSubagentTool(h, true, []));

@@ -393,7 +393,7 @@ export function apply(ctx: Context): void {
             <div className="dtr-inline dtr-toolbar">
               <div className="dtr-inline dtr-preset-bar">
                 <span className="dtr-muted">{t('presetLabel')}</span>
-                <button type="button" onClick={() => applyPreset('all12')}>{t('presetAll12')}</button>
+                <button type="button" onClick={() => applyPreset('all')}>{t('presetAll', { count: BUILTIN_IDS.length })}</button>
                 <button type="button" onClick={() => applyPreset('classic7')}>{t('presetClassic7')}</button>
               </div>
               <div className="dtr-inline dtr-toolset">
@@ -529,5 +529,5 @@ export function apply(ctx: Context): void {
 
 function previewTarget(target: Target, t: Translate): string {
   if (target.mode === 'inherit') return t('inherit');
-  return `${target.provider} / ${target.model}${target.reasoningEffort ? ` · ${target.reasoningEffort}` : ''}`;
+  return `${target.provider} / ${target.model}${target.reasoningEffort ? ` · ${t('effort')}: ${target.reasoningEffort}` : ''}`;
 }

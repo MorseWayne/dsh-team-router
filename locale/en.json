@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Team task routing",
-    "description": "Route native DSH delegations by deliverable with 12 built-in categories and up to 8 custom categories. Edit routes and delegation behavior here or in Settings → Team task routing. Saving applies to new work and does not grant model access."
+    "description": "Route native DSH delegations by deliverable with 13 built-in categories and up to 8 custom categories. Editing routing config directly does not grant model access. Save in Team task routing settings to add missing profile grants, then start a new session; existing sessions keep their permissions."
   }
 }

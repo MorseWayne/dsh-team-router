@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { BUILTIN_IDS, MAX_CUSTOM_CATEGORIES } from '../src/core/categories.ts';
-import { buildNativeSubagentGuidance, buildNativeSubagentReminder } from '../src/core/native-subagent.ts';
+import { buildNativeSubagentGuidance, buildNativeSubagentReminder, buildTeamFallbackGuidance } from '../src/core/native-subagent.ts';
 import { createDefaultRoutingConfig } from '../src/core/routing-policy.ts';
 import type { CustomCategory } from '../src/core/routing-policy.ts';
 
@@ -36,7 +36,7 @@ test('combines same-model same-effort routes, separates effort and emits one inh
   assert.doesNotMatch(reminder, /unspecified|quick|Inherit —/);
 });
 
-test('keeps 20 same-model categories within a compact prompt budget while retaining all IDs and metadata', () => {
+test('keeps 13 built-ins + 8 custom categories within budget while retaining all IDs and metadata', t => {
   const config = createDefaultRoutingConfig(); config.defaultTarget = route;
   config.behavior.delegationMode = 'orchestrator';
   const purpose = 'Check evidence and state what remains uncertain. '.repeat(3).slice(0, 120);
@@ -44,6 +44,14 @@ test('keeps 20 same-model categories within a compact prompt budget while retain
   config.custom = Array.from({ length: MAX_CUSTOM_CATEGORIES }, (_, index) => custom(`custom-study-${index}`, purpose, avoid));
   const guide = buildNativeSubagentGuidance(config, context);
   const reminder = buildNativeSubagentReminder(config, context);
+  t.diagnostic(`Full same-tuple fixture: system ${guide.length} chars; step-1 ${reminder.length} chars`);
+  const fallback = buildTeamFallbackGuidance(config, context);
+  for (const system of [guide, fallback]) assert.match(system, /scope, checks, and when to stop and hand back/);
+  for (const output of [guide, fallback, reminder]) {
+    assert.match(output, /One owner per deliverable, not keywords; split only independently verifiable work, keeping fan-out lean/);
+  }
+  assert.match(reminder, /^\[team-router: orchestrator\] Orchestrator:/);
+  assert.match(reminder, /scout \(Read-only:/);
   assert.ok(guide.length < 3_800, `guidance used ${guide.length} chars`);
   assert.ok(reminder.length < 2_400, `reminder used ${reminder.length} chars`);
   for (const output of [guide, reminder]) assert.equal(output.match(/\("provider", "specialist-model"\)/g)?.length, 1);

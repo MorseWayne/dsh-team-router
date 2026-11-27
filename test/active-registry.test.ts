@@ -14,7 +14,7 @@ const custom = (id: string, values: Partial<CustomCategory> = {}): CustomCategor
 
 test('resolves built-in order, sorted enabled custom IDs, metadata and effective binding sources', () => {
   const config = createDefaultRoutingConfig(); config.defaultTarget = target;
-  config.builtins = { writing: { enabled: false }, deep: { binding: { mode: 'inherit' } } };
+  config.builtins = { ...config.builtins, writing: { enabled: false }, deep: { binding: { mode: 'inherit' } } };
   config.custom = [custom('custom-z'), custom('custom-a', { binding: { ...target, reasoningEffort: 'high' }, avoid: 'Only if sourced' }), custom('custom-off', { enabled: false })];
   const registry = resolveActiveRegistry(config);
   assert.deepEqual(registry.entries.map(e => e.id), [...BUILTIN_IDS.filter(id => id !== 'writing'), 'custom-a', 'custom-z']);

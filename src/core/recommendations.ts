@@ -13,11 +13,12 @@ export interface ModelCatalog {
   groups: Array<{ id: string; name: string; models: CatalogModel[] }>;
   failures: Array<{ id: string; name: string; message: string }>;
 }
-export interface RecommendationCandidate { readonly provider: string; readonly model: string }
+export interface RecommendationCandidate { readonly provider: string; readonly model: string; readonly preferredEffort?: string }
 
 /** Curated exact IDs, not benchmark rankings or promises of availability or authorization. */
-export const RECOMMENDATION_VERSION = '2026-11-27.1';
-const candidate = (provider: string, model: string): RecommendationCandidate => Object.freeze({ provider, model });
+export const RECOMMENDATION_VERSION = '2026-11-27.2';
+const candidate = (provider: string, model: string, preferredEffort?: string): RecommendationCandidate =>
+  Object.freeze({ provider, model, ...(preferredEffort === undefined ? {} : { preferredEffort }) });
 const sonnet = candidate('anthropic', 'claude-sonnet-4-5');
 const opus = candidate('anthropic', 'claude-opus-4-1');
 const geminiPro = candidate('google', 'gemini-2.5-pro');
@@ -33,6 +34,12 @@ const agyOpus = candidate('antigravity', 'claude-opus-5-5');
 const agySonnet = candidate('antigravity', 'claude-sonnet-5-5');
 const agyFlash = candidate('antigravity', 'gemini-3.8-flash');
 
+const fastModels = Object.freeze([subscriptionMini, agyFlash, chat, mini, geminiFlash,
+  candidate('antigravity-acp', 'gemini-4-hydrogen', 'low'), candidate('openai-codex', 'gpt-6.2-sol', 'low'),
+  candidate('antigravity-acp', 'gemini-4-neon', 'low'), candidate('openai-codex', 'gpt-6.2-astra', 'low'),
+  candidate(astra.provider, astra.model, 'low'), candidate(codex.provider, codex.model, 'low'),
+]);
+
 export const RECOMMENDATION_CANDIDATES: Readonly<Record<BuiltinId, readonly RecommendationCandidate[]>> = Object.freeze({
   'visual-engineering': Object.freeze([argon, agyOpus, astra, geminiPro, sonnet, codex]),
   'frontend-engineering': Object.freeze([agySonnet, astra, geminiPro, codex, sonnet]),
@@ -44,7 +51,8 @@ export const RECOMMENDATION_CANDIDATES: Readonly<Record<BuiltinId, readonly Reco
   ultrabrain: Object.freeze([astra, agyOpus, reasoner, opus, geminiPro]),
   artistry: Object.freeze([agyOpus, argon, astra, opus, geminiPro, sonnet]),
   writing: Object.freeze([agySonnet, astra, chat, sonnet, argon, geminiPro]),
-  quick: Object.freeze([subscriptionMini, agyFlash, chat, mini, geminiFlash]),
+  scout: fastModels,
+  quick: fastModels,
   unspecified: Object.freeze([agySonnet, subscriptionMini, chat, sonnet, geminiFlash]),
 });
 
@@ -65,6 +73,19 @@ export interface RecommendationPreview {
   group?: BuiltinGroupId;
 }
 
+function recommendedTarget(candidates: readonly RecommendationCandidate[], catalog: ModelCatalog): RecommendationChange['after'] | undefined {
+  for (const { provider, model, preferredEffort } of candidates) {
+    if (catalog.failures.some(failure => failure.id === provider)) continue;
+    const match = catalog.groups.find(group => group.id === provider)?.models.find(entry => entry.id === model);
+    if (!match) continue;
+    return { mode: 'explicit', provider, model,
+      ...(preferredEffort !== undefined && match.reasoning?.efforts.some(e => e.id === preferredEffort)
+        ? { reasoningEffort: preferredEffort } : {}),
+    };
+  }
+  return undefined;
+}
+
 export function previewRecommendations(
   input: unknown,
   catalog: ModelCatalog,
@@ -83,11 +104,8 @@ export function previewRecommendations(
     if (!registry.byId.has(id)) { skippedDisabled.push(id); continue; }
     const before = config.builtins[id]?.binding ?? { mode: 'default' };
     if (before.mode !== 'default' && !overwrite) { preserved.push(id); continue; }
-    const match = RECOMMENDATION_CANDIDATES[id].find(entry =>
-      !catalog.failures.some(failure => failure.id === entry.provider)
-      && catalog.groups.some(group => group.id === entry.provider && group.models.some(model => model.id === entry.model)));
-    if (!match) { unavailable.push(id); continue; }
-    const after: RecommendationChange['after'] = { mode: 'explicit', provider: match.provider, model: match.model };
+    const after = recommendedTarget(RECOMMENDATION_CANDIDATES[id], catalog);
+    if (!after) { unavailable.push(id); continue; }
     if (JSON.stringify(before) === JSON.stringify(after)) continue;
     changes.push({ category: id, before: structuredClone(before), after: { ...after } });
     config.builtins[id] = { ...config.builtins[id], binding: after };

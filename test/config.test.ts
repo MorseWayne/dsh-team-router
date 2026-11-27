@@ -21,6 +21,11 @@ test('native schema exposes only one volatile value and keeps stateDir static', 
   assert.equal(Config.dict!.stateDir!.meta.volatile, undefined);
   assert.equal(config.routing.get(), undefined);
   assert.deepEqual(readRoutingConfig(config), createDefaultRoutingConfig());
+  const hostSchema = new Schema(Config.toJSON());
+  for (const [raw, builtins] of [[{}, { scout: { enabled: true } }], [{ routing: { version: 3 } }, {}],
+    [{ routing: { version: 3, builtins: {} } }, {}]] as const) {
+    assert.deepEqual(readRoutingConfig(hostSchema(raw) as Config).builtins, builtins);
+  }
   assert.deepEqual(config.unknownStaticField, { keep: true });
   assert.throws(() => Config({ stateDir: '  ' }));
 });

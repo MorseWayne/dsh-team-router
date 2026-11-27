@@ -74,7 +74,7 @@ function editHistory(editor: RoutingEditor, value = '42'): void {
 }
 
 describe('V3 routing form and draft helpers', () => {
-  it('renders all 12 built-ins enabled by default and produces normalized V3 config', () => {
+  it('renders all 13 built-ins enabled by default and produces normalized V3 config', () => {
     const draft = routingConfigToDraft(createDefaultRoutingConfig());
     assert.deepEqual(Object.keys(draft.builtins), BUILTIN_IDS);
     assert.ok(BUILTIN_IDS.every(id => draft.builtins[id].enabled && draft.builtins[id].binding.mode === 'default'));
@@ -83,7 +83,10 @@ describe('V3 routing form and draft helpers', () => {
     assert.equal(routingDraftIssue(draft), undefined);
     const config = routingDraftToConfig(draft);
     assert.equal(config.version, 3);
-    assert.deepEqual(config.builtins, {});
+    assert.deepEqual(config, createDefaultRoutingConfig());
+    const old = { ...config, builtins: {} };
+    assert.equal(routingConfigToDraft(old).builtins.scout.enabled, false);
+    assert.deepEqual(routingDraftToConfig(routingConfigToDraft(old)), old);
   });
 
   it('uses factory default when routing is omitted, and rejects null or non-V3 configs', () => {
@@ -141,18 +144,38 @@ describe('Active-only model grants synchronization', () => {
   const mini = { provider: 'openai', model: 'gpt-5-mini' };
   const codex = { provider: 'openai', model: 'gpt-5-codex' };
 
+  it('opts a saved V3 draft into scout recommendations without granting until save', async () => {
+    const form = new FakeForm({ routing: { ...createDefaultRoutingConfig(), builtins: {} } });
+    const editor = new RoutingEditor(form, form.grants);
+    const pair = { provider: 'openai-codex', model: 'gpt-6.2-sol' };
+    const catalog: ModelCatalog = { failures: [], groups: [{ id: pair.provider, name: 'Adapter', models: [
+      { id: pair.model, name: 'Sol', reasoning: { efforts: [{ id: 'low', name: 'Low' }] } },
+    ] }] };
+    const preview = () => previewRecommendations(routingDraftToConfig(editor.getSnapshot().draft!), catalog, { group: 'analysis' });
+    assert.deepEqual(preview().skippedDisabled, ['scout']);
+    editor.setBuiltinEnabled('scout', true);
+    assert.equal(editor.getSnapshot().dirty, true);
+    assert.equal(editor.applyRecommendations(preview()), true);
+    assert.equal(form.grants.writes, 0);
+    assert.equal(await editor.save({ catalog }), true);
+    assert.deepEqual(form.state.value!.routing!.builtins.scout, { enabled: true, binding: { mode: 'explicit', ...pair, reasoningEffort: 'low' } });
+    assert.deepEqual(form.grants.state.value!.allowedModels, [{ provider: 'other', model: 'keep' }, pair]);
+    assert.equal(editor.getSnapshot().dirty, false);
+    editor.dispose();
+  });
+
   it('computes required routes strictly from active effective targets', () => {
     const config = createDefaultRoutingConfig();
     config.defaultTarget = { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini' };
     assert.deepEqual(requiredModelRoutes(config), [mini]);
 
-    // Override all 12 built-ins to codex => defaultTarget (mini) is no longer needed!
+    // Override all enabled built-ins to codex => defaultTarget (mini) is no longer needed!
     for (const id of BUILTIN_IDS) {
-      config.builtins[id] = { binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' } };
+      config.builtins[id] = { ...config.builtins[id], binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' } };
     }
     assert.deepEqual(requiredModelRoutes(config), [codex]);
 
-    // Disable all 12 built-ins => zero grants required!
+    // Disable all built-ins => zero grants required!
     for (const id of BUILTIN_IDS) config.builtins[id] = { enabled: false, binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' } };
     assert.deepEqual(requiredModelRoutes(config), []);
   });
@@ -229,7 +252,7 @@ describe('Active-only model grants synchronization', () => {
 });
 
 describe('RoutingEditor V3 behaviors, presets, custom categories & recommendations', () => {
-  it('switches classic7 / all12 presets without clearing bindings or custom categories', async () => {
+  it('switches classic7 / all presets without clearing bindings or custom categories', async () => {
     const config = createDefaultRoutingConfig();
     config.builtins['backend-data'] = { binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' } };
     config.custom.push({
@@ -249,7 +272,11 @@ describe('RoutingEditor V3 behaviors, presets, custom categories & recommendatio
     assert.equal(draft.custom[0]!.enabled, true);
     assert.equal(form.writes.length, 0); // Not auto-saved
 
-    editor.applyBuiltinPreset('all12');
+    assert.equal(draft.builtins.scout.enabled, false);
+    editor.setBuiltinEnabled('scout', true);
+    assert.equal(Object.values(editor.getSnapshot().draft!.builtins).filter(c => c.enabled).length, 8);
+    editor.applyBuiltinPreset('all');
+    assert.ok(BUILTIN_IDS.every(id => editor.getSnapshot().draft!.builtins[id].enabled));
     assert.equal(editor.getSnapshot().dirty, false); // Back to saved state
     editor.dispose();
   });

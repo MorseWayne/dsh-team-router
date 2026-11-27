@@ -1,6 +1,6 @@
 {
   "name": "dsh-team-router",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Configurable task categories and authorized model routing for native DeepSeek Harness delegation.",
   "type": "module",
   "repository": {

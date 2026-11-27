@@ -21,7 +21,7 @@ export declare const BUILTIN_GROUPS: Readonly<{
     }>;
 }>;
 export type BuiltinGroupId = keyof typeof BUILTIN_GROUPS;
-export declare const BUILTIN_IDS: readonly ["visual-engineering", "frontend-engineering", "backend-data", "deep", "debugging", "code-review", "verification-automation", "ultrabrain", "artistry", "writing", "quick", "unspecified"];
+export declare const BUILTIN_IDS: readonly ["visual-engineering", "frontend-engineering", "backend-data", "deep", "debugging", "code-review", "verification-automation", "ultrabrain", "artistry", "writing", "scout", "quick", "unspecified"];
 export type BuiltinId = typeof BUILTIN_IDS[number];
 export interface BuiltinCategoryText {
     readonly name: string;
@@ -36,6 +36,8 @@ export interface BuiltinCategory {
     readonly group: BuiltinGroupId;
     readonly proactive: boolean;
     readonly classic7: boolean;
+    /** Enabled when omitted from an existing V3 config (not the new-install preset). */
+    readonly defaultEnabled: boolean;
     readonly zh: BuiltinCategoryText;
     readonly en: BuiltinCategoryText;
 }

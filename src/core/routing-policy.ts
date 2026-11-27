@@ -1,4 +1,4 @@
-import { BUILTIN_IDS, CUSTOM_ID_PATTERN, MAX_CUSTOM_CATEGORIES, isBuiltinId } from './categories.ts';
+import { BUILTINS, BUILTIN_IDS, CUSTOM_ID_PATTERN, MAX_CUSTOM_CATEGORIES, isBuiltinId } from './categories.ts';
 import type { BuiltinId } from './categories.ts';
 import { fingerprintNormalized } from './routing-fingerprint.ts';
 
@@ -100,19 +100,23 @@ function target(input: unknown, path: string): Target {
 export function parseTarget(input: unknown): Target { return target(input, 'target'); }
 export function parseBinding(input: unknown): Binding { return route(input, 'binding', true); }
 
-export function createDefaultRoutingConfig(): RoutingConfig {
+function baseConfig(builtins: RoutingConfig['builtins']): RoutingConfig {
   return {
     version: 3, defaultTarget: { mode: 'inherit' },
     behavior: { guidance: true, delegationMode: 'passive', strict: false },
-    builtins: {}, custom: [], historyLimit: 100,
+    builtins, custom: [], historyLimit: 100,
   };
+}
+
+export function createDefaultRoutingConfig(): RoutingConfig {
+  return baseConfig({ scout: { enabled: true } });
 }
 
 /** Defaults fill omitted top-level values only; present invalid data is never reset. */
 export function parseRoutingConfig(input: unknown): RoutingConfig {
   const source = record(input, 'routing', ['version', 'defaultTarget', 'behavior', 'builtins', 'custom', 'historyLimit']);
   if (source.version !== 3) fail('routing.version', 'must be 3');
-  const result = createDefaultRoutingConfig();
+  const result = baseConfig({});
   if (Object.hasOwn(source, 'defaultTarget')) result.defaultTarget = target(source.defaultTarget, 'routing.defaultTarget');
   if (Object.hasOwn(source, 'behavior')) {
     const path = 'routing.behavior';
@@ -128,7 +132,10 @@ export function parseRoutingConfig(input: unknown): RoutingConfig {
       const path = `routing.builtins[${JSON.stringify(id)}]`;
       const entry = record(map[id], path, ['enabled', 'binding']);
       const override: BuiltinOverride = {};
-      if (Object.hasOwn(entry, 'enabled') && !boolean(entry.enabled, `${path}.enabled`)) override.enabled = false;
+      if (Object.hasOwn(entry, 'enabled')) {
+        const enabled = boolean(entry.enabled, `${path}.enabled`);
+        if (enabled !== BUILTINS[id].defaultEnabled) override.enabled = enabled;
+      }
       if (Object.hasOwn(entry, 'binding')) {
         const binding = route(entry.binding, `${path}.binding`, true);
         if (binding.mode !== 'default') override.binding = binding;

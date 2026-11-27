@@ -65,7 +65,7 @@ export interface RoutingEditorSnapshot {
     error: RoutingEditorError | undefined;
     notice: 'saved' | undefined;
 }
-export type BuiltinPreset = 'all12' | 'classic7';
+export type BuiltinPreset = 'all' | 'classic7';
 export interface CustomCategorySeed {
     id?: string;
     name?: string;

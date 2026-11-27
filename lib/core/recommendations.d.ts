@@ -26,9 +26,10 @@ export interface ModelCatalog {
 export interface RecommendationCandidate {
     readonly provider: string;
     readonly model: string;
+    readonly preferredEffort?: string;
 }
 /** Curated exact IDs, not benchmark rankings or promises of availability or authorization. */
-export declare const RECOMMENDATION_VERSION = "2026-11-27.1";
+export declare const RECOMMENDATION_VERSION = "2026-11-27.2";
 export declare const RECOMMENDATION_CANDIDATES: Readonly<Record<BuiltinId, readonly RecommendationCandidate[]>>;
 export interface RecommendationChange {
     category: BuiltinId;

@@ -16,8 +16,8 @@ function catalog(): ModelCatalog {
   };
 }
 
-test('ships a frozen versioned exact manifest with diverse makers for all twelve categories', () => {
-  assert.equal(RECOMMENDATION_VERSION, '2026-11-27.1');
+test('ships a frozen versioned exact manifest with diverse makers for all thirteen categories', () => {
+  assert.equal(RECOMMENDATION_VERSION, '2026-11-27.2');
   assert.deepEqual(Object.keys(RECOMMENDATION_CANDIDATES), BUILTIN_IDS);
   assert.ok(Object.isFrozen(RECOMMENDATION_CANDIDATES));
   for (const id of BUILTIN_IDS) {
@@ -30,21 +30,21 @@ test('ships a frozen versioned exact manifest with diverse makers for all twelve
 test('chooses the first exact catalog match, never a substring, alias, failure or unverified reasoning effort', () => {
   const available = catalog();
   available.failures.push({ id: 'google', name: 'Google', message: 'timeout' });
-  const result = previewRecommendations({ version: 3 }, available);
+  const result = previewRecommendations(createDefaultRoutingConfig(), available);
   assert.deepEqual(result.changes.map(change => change.category), BUILTIN_IDS);
   assert.deepEqual(result.unavailable, []);
   assert.equal(result.manifestVersion, RECOMMENDATION_VERSION);
   for (const change of result.changes) {
     const expected = RECOMMENDATION_CANDIDATES[change.category].find(entry => entry.provider !== 'google'
       && available.groups.some(group => group.id === entry.provider && group.models.some(model => model.id === entry.model)))!;
-    assert.deepEqual(change.after, { mode: 'explicit', ...expected });
+    assert.deepEqual(change.after, { mode: 'explicit', provider: expected.provider, model: expected.model });
   }
   const wrong: ModelCatalog = { groups: [
     { id: 'OpenAI', name: 'openai', models: [{ id: 'gpt-5-mini', name: 'gpt-5-mini' }] },
     { id: 'openai', name: 'OpenAI', models: [{ id: 'gpt-5-mini-latest', name: 'gpt-5-mini' }] },
     { id: 'google', name: 'Google', models: [{ id: 'gemini-2.5-pro-preview', name: 'gemini-2.5-pro' }] },
   ], failures: [] };
-  assert.deepEqual(previewRecommendations({ version: 3 }, wrong).unavailable, BUILTIN_IDS);
+  assert.deepEqual(previewRecommendations(createDefaultRoutingConfig(), wrong).unavailable, BUILTIN_IDS);
 });
 
 test('matches installed subscription adapter IDs by exact native catalog entries', () => {
@@ -53,9 +53,30 @@ test('matches installed subscription adapter IDs by exact native catalog entries
     { id: 'antigravity', name: 'Antigravity', models: ['gemini-4-argon', 'claude-opus-5-5', 'claude-sonnet-5-5', 'gemini-3.8-flash'].map(id => ({ id, name: id })) },
   ], failures: [] };
   const { config, changes } = previewRecommendations({ version: 3 }, available);
-  assert.equal(changes.length, 12);
+  assert.equal(changes.length, 12); // Saved V3 never opts into scout implicitly.
+  assert.equal(config.builtins.scout, undefined);
   assert.deepEqual(config.builtins.ultrabrain?.binding, { mode: 'explicit', provider: 'openai-codex', model: 'gpt-6-astra' });
   assert.deepEqual(config.builtins.deep?.binding, { mode: 'explicit', provider: 'antigravity', model: 'claude-sonnet-5-5' });
+});
+
+test('prefers fast models, requests only an exact advertised low effort on fallbacks, and respects manual bindings', () => {
+  for (const [provider, model] of [['antigravity-acp', 'gemini-4-hydrogen'], ['openai-codex', 'gpt-6.2-sol']] as const) {
+    for (const ids of [[], ['high', 'LOW'], ['high', 'low']]) {
+      const available: ModelCatalog = { failures: [], groups: [{ id: provider, name: provider, models: [{ id: model, name: model,
+        reasoning: { efforts: ids.map(id => ({ id, name: id })), defaultEffort: 'high' },
+      }] }] };
+      const config = createDefaultRoutingConfig();
+      const manual = { mode: 'explicit', provider, model, reasoningEffort: 'high' } as const;
+      config.builtins.scout!.binding = manual;
+      assert.deepEqual(previewRecommendations(config, available).config.builtins.scout!.binding, manual);
+      const expected = { mode: 'explicit', provider, model, ...(ids.includes('low') ? { reasoningEffort: 'low' } : {}) };
+      const preview = previewRecommendations(config, available, { overwrite: true });
+      for (const id of ['quick', 'scout'] as const) assert.deepEqual(preview.config.builtins[id]!.binding, expected);
+      available.groups.push({ id: 'google', name: 'Google', models: [{ id: 'gemini-2.5-flash', name: 'Flash', reasoning: { efforts: [{ id: 'low', name: 'Low' }] } }] });
+      assert.deepEqual(previewRecommendations(config, available, { overwrite: true }).config.builtins.scout!.binding,
+        { mode: 'explicit', provider: 'google', model: 'gemini-2.5-flash' });
+    }
+  }
 });
 
 test('scopes group previews, skips disabled categories and never recommends in custom categories', () => {

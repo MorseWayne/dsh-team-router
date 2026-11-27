@@ -1,6 +1,7 @@
-# dsh-team-router 1.0.0 routing V3 example. Prefer the Team task routing settings.
-# Replace YOUR_* with exact IDs from the Host catalog. Saving this config does
-# not grant model access: authorize the pair for the Session before delegating.
+# dsh-team-router routing V3 example (1.0.0 base). Prefer the Team task routing settings.
+# Replace YOUR_* with exact IDs from the Host catalog. Direct config edits do not
+# grant model access. Save in Team task routing settings to sync profile grants,
+# then start a new Session (existing Sessions keep their authorization).
 - id: team-router
   config:
     routing:
@@ -11,6 +12,8 @@
         delegationMode: passive  # passive | specialist-first | orchestrator
         strict: false
       builtins:
+        # Uncomment only on scout-enabled builds to opt in to read-only discovery.
+        # scout: { enabled: true }
         deep:
           binding:
             mode: explicit
@@ -21,8 +24,8 @@
       custom:
         - id: custom-evidence-check
           name: Evidence verification
-          purpose: Verify a specific-version API or docs and cite sources and uncertainties.
-          avoid: Use writing when the task is to organize a manual.
+          purpose: Cross-check a specific claim against sources; list supporting, conflicting and unverified points.
+          avoid: Not for open-ended fact gathering or organizing a manual.
           enabled: true
           proactive: false
           binding: { mode: default }

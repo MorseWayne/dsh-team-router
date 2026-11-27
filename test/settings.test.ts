@@ -12,6 +12,7 @@ import { ConfigEditor } from '@deepseek-ai/dsh-config-editor';
 import { SettingsConflictError, SettingsForms } from '@deepseek-ai/dsh-settings';
 import { Config, installConfigValidation, readRoutingConfig } from '../src/adapter/dsh/config.ts';
 import { createDefaultRoutingConfig } from '../src/core/routing-policy.ts';
+import { en, zh } from '../src/ui/settings-copy.ts';
 import { customCategory, explicitTarget } from './helpers.ts';
 
 const namespace = 'team-router-routing-test';
@@ -95,6 +96,13 @@ async function settingsFixture(t: TestContext, inheritFromBase = false) {
   await start();
   return { ctx, entry, descriptor, live, save, start, stop, patchPath, stateDir, staticValue, inherited };
 }
+
+it('names the lead coordinator and clarifies its limits in both locales', () => {
+  assert.equal(en.delegationOrchestrator, 'Lead coordinator');
+  assert.equal(en.delegationOrchestratorNote, 'The lead scopes and verifies while subagents run matching work; does not switch the lead model or enable team boards.');
+  assert.equal(zh.delegationOrchestrator, '主助手统筹');
+  assert.equal(zh.delegationOrchestratorNote, '主助手负责分工和验收，匹配工作交给子助手；不会自动切换主助手模型，也不自动开启团队看板。');
+});
 
 describe('native V3 Settings persistence and CAS', { concurrency: false, timeout: 30_000 }, () => {
   it('commits routes and behavior together on the same Fiber/ref and persists on reboot', async t => {

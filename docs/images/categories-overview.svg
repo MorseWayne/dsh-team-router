@@ -1,15 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 636" width="1120" height="636" role="img" aria-label="12 个内置类别与 4 张自定义场景模板全景图">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 674" width="1120" height="674" role="img" aria-label="13 个内置类别与 4 张自定义场景模板全景图">
   <!-- Outer Card -->
-  <rect x="1" y="1" width="1118" height="634" rx="18" fill="#F8FAFC" stroke="#DCE5F0" stroke-width="1.5"/>
+  <rect x="1" y="1" width="1118" height="672" rx="18" fill="#F8FAFC" stroke="#DCE5F0" stroke-width="1.5"/>
 
   <!-- Header -->
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    <text x="36" y="40" fill="#0F172A" font-size="18" font-weight="700">分工全景：4 大工作组 12 个内置类别 + 最多 8 个自定义类别</text>
+    <text x="36" y="40" fill="#0F172A" font-size="18" font-weight="700">分工全景：4 大工作组 13 个内置类别 + 最多 8 个自定义类别</text>
     <!-- Legend -->
     <rect x="752" y="19" width="154" height="26" rx="13" fill="#EEF4FB" stroke="#BDD2EC"/>
     <text x="829" y="36" text-anchor="middle" fill="#2F598A" font-size="11.5" font-weight="600">精简7 = 精简 7 类预设包含</text>
     <rect x="918" y="19" width="166" height="26" rx="13" fill="#E6F4F1" stroke="#A7D8CE"/>
-    <text x="1001" y="36" text-anchor="middle" fill="#1F5E54" font-size="11.5" font-weight="600">全 12 类均支持逐个启停</text>
+    <text x="1001" y="36" text-anchor="middle" fill="#1F5E54" font-size="11.5" font-weight="600">全 13 类均支持逐个启停</text>
   </g>
 
   <!-- Group 1: Product & Engineering (Top Left) -->
@@ -89,11 +89,11 @@
 
   <!-- Group 3: Analysis & Expression (Bottom Left) -->
   <g transform="translate(36, 288)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    <rect x="0" y="0" width="514" height="164" rx="14" fill="#FFFFFF" stroke="#D8DDF0" stroke-width="1.4"/>
+    <rect x="0" y="0" width="514" height="202" rx="14" fill="#FFFFFF" stroke="#D8DDF0" stroke-width="1.4"/>
     <path d="M 14 0 L 500 0 Q 514 0 514 14 L 514 40 L 0 40 L 0 14 Q 0 0 14 0 Z" fill="#F2F3FA"/>
     <circle cx="22" cy="20" r="5" fill="#58699B"/>
     <text x="36" y="25" fill="#2F3B61" font-size="14" font-weight="700">3. 分析与表达</text>
-    <text x="496" y="25" text-anchor="end" fill="#58699B" font-size="11.5" font-weight="600">3 项 · 支持主动派单</text>
+    <text x="496" y="25" text-anchor="end" fill="#58699B" font-size="11.5" font-weight="600">4 项 · 支持主动派单</text>
 
     <!-- Row 1 -->
     <g transform="translate(14, 50)">
@@ -122,11 +122,17 @@
       <rect x="434" y="6" width="44" height="20" rx="5" fill="#DCEBFA"/>
       <text x="456" y="19.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
     </g>
+    <g transform="translate(14, 164)">
+      <rect width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">信息侦察</text>
+      <text x="84" y="20.5" fill="#58699B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">scout</text>
+      <text x="152" y="20.5" fill="#475569" font-size="12">只读收集证据，列出出处与盲区</text>
+    </g>
   </g>
 
   <!-- Group 4: General & Fallback (Bottom Right) -->
   <g transform="translate(570, 288)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    <rect x="0" y="0" width="514" height="164" rx="14" fill="#FFFFFF" stroke="#DCE2EA" stroke-width="1.4"/>
+    <rect x="0" y="0" width="514" height="202" rx="14" fill="#FFFFFF" stroke="#DCE2EA" stroke-width="1.4"/>
     <path d="M 14 0 L 500 0 Q 514 0 514 14 L 514 40 L 0 40 L 0 14 Q 0 0 14 0 Z" fill="#F1F5F9"/>
     <circle cx="22" cy="20" r="5" fill="#64748B"/>
     <text x="36" y="25" fill="#334155" font-size="14" font-weight="700">4. 通用与兜底</text>
@@ -154,7 +160,7 @@
   </g>
 
   <!-- Custom Categories Section -->
-  <g transform="translate(36, 470)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+  <g transform="translate(36, 508)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
     <rect x="0" y="0" width="1048" height="142" rx="14" fill="#FFFFFF" stroke="#9BB7D9" stroke-width="1.5" stroke-dasharray="6 4"/>
     <text x="20" y="29" fill="#0F172A" font-size="14.5" font-weight="700">自定义类别扩展区（最多 8 个）</text>
     <text x="260" y="29" fill="#547DAE" font-size="12" font-weight="600">支持空白新建，或从以下 4 张内置场景模板卡一键起步</text>
@@ -165,7 +171,7 @@
       <rect x="0" y="0" width="242" height="82" rx="10" fill="#F8FAFC" stroke="#E2E8F0"/>
       <text x="14" y="24" fill="#0F172A" font-size="13.5" font-weight="700">证据核验</text>
       <text x="14" y="42" fill="#547DAE" font-size="11" font-family="'SFMono-Regular', Consolas, monospace">custom-evidence-check</text>
-      <text x="14" y="64" fill="#475569" font-size="11.5">查清指定版本 API 与文档出处</text>
+      <text x="14" y="64" fill="#475569" font-size="11.5">核验具体主张：支持、矛盾或未证实</text>
     </g>
 
     <!-- Template 2 -->

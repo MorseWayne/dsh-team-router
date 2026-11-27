@@ -57,9 +57,9 @@ export function resolveActiveRegistry(input: unknown): ActiveRegistry {
       ? { bindingSource: 'default', effectiveTarget: config.defaultTarget }
       : { bindingSource: 'category', effectiveTarget: binding }
   );
-  for (const { id, group, en, zh, proactive } of BUILTIN_LIST) {
+  for (const { id, group, en, zh, proactive, defaultEnabled } of BUILTIN_LIST) {
     const entry = config.builtins[id];
-    if (entry?.enabled === false) continue;
+    if (!(entry?.enabled ?? defaultEnabled)) continue;
     entries.push(Object.freeze({
       id, origin: 'builtin', group, nameEn: en.name, nameZh: zh.name, purposeEn: en.purpose, purposeZh: zh.purpose,
       shortPurposeEn: en.shortPurpose, avoidEn: en.avoid, deliverableCheckEn: en.deliverableCheck, proactive,

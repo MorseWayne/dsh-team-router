@@ -1,5 +1,5 @@
 import {
-  BUILTIN_IDS, CLASSIC7_IDS, CUSTOM_ID_PATTERN, MAX_CUSTOM_CATEGORIES,
+  BUILTINS, BUILTIN_IDS, CLASSIC7_IDS, CUSTOM_ID_PATTERN, MAX_CUSTOM_CATEGORIES,
   generateCustomCategoryId, isBuiltinId,
 } from '../core/categories.ts';
 import type { BuiltinId } from '../core/categories.ts';
@@ -76,7 +76,7 @@ export interface RoutingEditorSnapshot {
   error: RoutingEditorError | undefined;
   notice: 'saved' | undefined;
 }
-export type BuiltinPreset = 'all12' | 'classic7';
+export type BuiltinPreset = 'all' | 'classic7';
 export interface CustomCategorySeed {
   id?: string;
   name?: string;
@@ -104,7 +104,7 @@ export function routingConfigToDraft(input: unknown, persistedCustomIds?: Readon
   for (const id of BUILTIN_IDS) {
     const override = config.builtins[id];
     builtins[id] = {
-      enabled: override?.enabled !== false,
+      enabled: override?.enabled ?? BUILTINS[id].defaultEnabled,
       binding: override?.binding ? structuredClone(override.binding) : { mode: 'default' },
     };
   }
@@ -133,7 +133,7 @@ export function routingDraftToConfig(draft: RoutingDraft): RoutingConfig {
     const entry = draft.builtins[id];
     if (!entry) continue;
     const override: BuiltinOverride = {};
-    if (!entry.enabled) override.enabled = false;
+    if (entry.enabled !== BUILTINS[id].defaultEnabled) override.enabled = entry.enabled;
     if (entry.binding.mode !== 'default') override.binding = entry.binding;
     if (Object.keys(override).length > 0) builtins[id] = override;
   }
@@ -384,7 +384,7 @@ export class RoutingEditor {
     if (!draft) return;
     const builtins = { ...draft.builtins };
     for (const id of BUILTIN_IDS) {
-      const enabled = preset === 'all12' ? true : CLASSIC7_SET.has(id);
+      const enabled = preset === 'all' || CLASSIC7_SET.has(id);
       builtins[id] = { ...builtins[id], enabled };
     }
     this.edit({ ...draft, builtins }, revision);

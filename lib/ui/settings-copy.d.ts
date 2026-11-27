@@ -21,7 +21,7 @@ export declare const en: {
     defaults: string;
     defaultPurpose: string;
     presetLabel: string;
-    presetAll12: string;
+    presetAll: string;
     presetClassic7: string;
     presetHint: string;
     proactive: string;

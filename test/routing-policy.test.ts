@@ -11,9 +11,11 @@ const target = { mode: 'explicit', provider: 'p', model: 'm' } as const;
 const custom = (id = 'custom-evidence'): CustomCategory => ({ id, name: 'Evidence', purpose: 'Verify sources.', enabled: true, proactive: false, binding: { mode: 'default' } });
 const rejectConfig = (value: unknown, expected: typeof TypeError | RegExp = TypeError) => assert.throws(() => parseRoutingConfig(value), expected);
 
-it('defines 12 ordered bilingual categories, classic subset and four template cards', () => {
+it('defines 13 ordered bilingual categories, classic subset and four template cards', () => {
   assert.deepEqual(BUILTIN_IDS, ['visual-engineering', 'frontend-engineering', 'backend-data', 'deep', 'debugging', 'code-review',
-    'verification-automation', 'ultrabrain', 'artistry', 'writing', 'quick', 'unspecified']);
+    'verification-automation', 'ultrabrain', 'artistry', 'writing', 'scout', 'quick', 'unspecified']);
+  assert.equal(BUILTINS.scout.group, 'analysis');
+  assert.deepEqual(BUILTIN_LIST.filter(c => !c.defaultEnabled).map(c => c.id), ['scout']);
   assert.deepEqual(Object.keys(BUILTIN_GROUPS), ['implementation', 'quality', 'analysis', 'general']);
   assert.deepEqual(Object.values(BUILTIN_GROUPS).map(({ zh, en }) => [zh, en]), [
     ['产品与工程实现', 'Product & engineering'], ['质量与交付', 'Quality & delivery'],
@@ -61,10 +63,11 @@ it('generates ASCII slugs with deterministic fallback, collisions and length bou
 describe('V3 strict parsing and fingerprint', () => {
   it('defaults omitted top-level fields only, validates version, and detaches views', () => {
     const a = createDefaultRoutingConfig(); const b = createDefaultRoutingConfig();
-    assert.deepEqual(a, b); assert.deepEqual(parseRoutingConfig({ version: 3 }), a);
-    assert.deepEqual(a, { version: 3, defaultTarget: { mode: 'inherit' }, behavior: { guidance: true, delegationMode: 'passive', strict: false }, builtins: {}, custom: [], historyLimit: 100 });
+    assert.deepEqual(a, b); assert.deepEqual(parseRoutingConfig({ version: 3 }), { ...a, builtins: {} });
+    assert.deepEqual(parseRoutingConfig(a), a);
+    assert.deepEqual(a, { version: 3, defaultTarget: { mode: 'inherit' }, behavior: { guidance: true, delegationMode: 'passive', strict: false }, builtins: { scout: { enabled: true } }, custom: [], historyLimit: 100 });
     a.behavior.strict = true; a.builtins.deep = { enabled: false }; a.custom.push(custom());
-    assert.equal(b.behavior.strict, false); assert.deepEqual(b.builtins, {}); assert.deepEqual(b.custom, []);
+    assert.equal(b.behavior.strict, false); assert.deepEqual(b.builtins, { scout: { enabled: true } }); assert.deepEqual(b.custom, []);
     for (const input of [undefined, null, {}, { version: 1 }, { version: 2 }, { version: '3' }]) rejectConfig(input);
     for (const key of ['defaultTarget', 'behavior', 'builtins', 'custom', 'historyLimit']) {
       rejectConfig({ version: 3, [key]: null }); rejectConfig({ version: 3, [key]: undefined });
@@ -78,6 +81,11 @@ describe('V3 strict parsing and fingerprint', () => {
     } });
     assert.deepEqual(config.builtins, { deep: { enabled: false }, artistry: { binding: target } });
     assert.notEqual(config.builtins.artistry?.binding, target);
+    const old = parseRoutingConfig({ version: 3, builtins: { scout: { enabled: false, binding: target } } });
+    assert.deepEqual(old.builtins, { scout: { binding: target } });
+    assert.deepEqual(parseRoutingConfig(old), old);
+    assert.equal(routingConfigFingerprint(old), routingConfigFingerprint({ ...old, builtins: { scout: { enabled: false, binding: target } } }));
+    assert.notEqual(routingConfigFingerprint(old), routingConfigFingerprint({ ...old, builtins: { scout: { enabled: true, binding: target } } }));
     assert.deepEqual(parseTarget({ ...target, provider: ' p ', model: ' m ', reasoningEffort: ' high ' }), { ...target, reasoningEffort: 'high' });
     assert.deepEqual(parseBinding({ mode: 'default' }), { mode: 'default' });
     assert.deepEqual(parseBinding({ mode: 'inherit' }), { mode: 'inherit' });
@@ -139,7 +147,7 @@ describe('V3 strict parsing and fingerprint', () => {
     }
     rejectConfig({ version: 3, custom: Object.defineProperty([custom()], 0, getter) }, /own data property/);
     rejectConfig(Object.defineProperty({ version: 3 }, 'hidden', { value: true }), /unknown field/);
-    assert.deepEqual(parseRoutingConfig(Object.freeze(Object.assign(Object.create(null), { version: 3 }))), createDefaultRoutingConfig());
+    assert.deepEqual(parseRoutingConfig(Object.freeze(Object.assign(Object.create(null), { version: 3 }))), parseRoutingConfig({ version: 3 }));
     assert.equal(called, false);
   });
   it('fingerprints all effective settings canonically, independent of input ordering', () => {
@@ -147,7 +155,8 @@ describe('V3 strict parsing and fingerprint', () => {
     const reordered = { custom: [...base.custom].reverse(), builtins: { quick: { enabled: true, binding: { mode: 'default' } }, deep: { binding: target } }, version: 3 };
     const fingerprint = routingConfigFingerprint(base);
     assert.equal(fingerprint, routingConfigFingerprint(reordered));
-    assert.equal(JSON.parse(fingerprint).builtins.length, 12);
+    assert.equal(JSON.parse(fingerprint).builtins.length, 12); // Original V3 canonical shape (no scout override).
+    assert.equal(JSON.parse(routingConfigFingerprint(createDefaultRoutingConfig())).builtins.length, 13);
     for (const update of [
       { defaultTarget: target }, { historyLimit: 1 }, { behavior: { guidance: false, strict: false, delegationMode: 'passive' } },
       { builtins: { deep: { binding: target }, quick: { enabled: false } } },

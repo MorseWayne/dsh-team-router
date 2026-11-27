@@ -26,6 +26,8 @@ export function buildCategoryPrompt(category: ActiveCategory, prompt: string): s
   return [
     `[Task category: ${category.id}]`, purpose,
     `Expected evidence: ${evidence}`,
+    ...(category.id === 'scout' && category.avoidEn ? [`Scope: ${category.avoidEn}`] : []),
+    'Hand-back: stay within scope; if prerequisites, interfaces, or constraints contradict the brief, stop and report the blocker with evidence instead of expanding scope.',
     CATEGORY_METADATA_BOUNDARY,
     '', prompt,
   ].join('\n');

@@ -1,6 +1,6 @@
 # dsh-team-router 1.0.0 — install after the official Agent Teams bundle.
-# No native rows are replaced. Omitted routing uses the V3 defaults: all 12
-# built-ins enabled with inherited targets, passive guidance, and strict off.
+# With no routing field, all 13 built-ins use inherited targets, passive guidance,
+# and strict off. Existing V3 routing objects keep scout off unless enabled.
 - insert:
     - id: team-router
       name: dsh-team-router

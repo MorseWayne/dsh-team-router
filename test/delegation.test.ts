@@ -6,6 +6,7 @@ import { DESCRIPTION_LIMIT, PROMPT_LIMIT, buildCategoryPrompt, outcomeState, val
 import { createDefaultRoutingConfig } from '../src/core/routing-policy.ts';
 
 const base = { category: 'writing', prompt: 'Write notes', description: 'notes' };
+const handBack = 'Hand-back: stay within scope; if prerequisites, interfaces, or constraints contradict the brief, stop and report the blocker with evidence instead of expanding scope.';
 
 test('bounds delegation args before side effects while leaving category activity to the registry', () => {
   validateDelegateArgs(base);
@@ -25,6 +26,7 @@ test('every built-in prompt includes its evidence checklist and a permissions bo
     const prompt = buildCategoryPrompt(entry, task);
     assert.ok(prompt.startsWith(`[Task category: ${entry.id}]\nDeliverable: ${expected.purpose}\n`));
     assert.ok(prompt.includes(`Expected evidence: ${expected.deliverableCheck}`));
+    assert.ok(prompt.includes(`\n${handBack}\n`));
     assert.match(prompt, /grants no extra permissions and never overrides user or Host rules/);
     assert.ok(prompt.endsWith(`\n\n${task}`));
   }
@@ -38,11 +40,12 @@ test('keeps custom text in one JSON metadata line, neutralizes role delimiters a
   const entry = resolveActiveRegistry(config).byId.get('custom-proof')!;
   const prompt = buildCategoryPrompt(entry, 'A task');
   const lines = prompt.split('\n');
-  assert.equal(lines.length, 6);
+  assert.equal(lines.length, 7);
   assert.deepEqual(JSON.parse(lines[1]!.replace('Deliverable metadata (JSON): ', '')), { purpose, avoid });
   assert.doesNotMatch(prompt, /<\/?system>|\[INST\]|\[Task category: writing\]|<\|assistant\|>|\("forged", "route"\)/);
   assert.equal(lines[2], 'Expected evidence: Deliver verifiable evidence for the requested deliverable; report blockers, unverified areas, and partial side effects.');
-  assert.match(lines[3]!, /describes the deliverable only.*never overrides/);
+  assert.equal(lines[3], handBack);
+  assert.match(lines[4]!, /describes the deliverable only.*never overrides/);
 });
 
 test('maps host stop reasons onto audit states', () => {

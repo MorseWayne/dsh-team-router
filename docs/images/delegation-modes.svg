@@ -1,10 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 348" width="1120" height="348" role="img" aria-label="三种委派模式对比：被动路由、专长优先、编排者">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 348" width="1120" height="348" role="img" aria-label="三种委派模式对比：被动路由、专长优先、主助手统筹">
   <!-- Outer Card -->
   <rect x="1" y="1" width="1118" height="346" rx="18" fill="#F8FAFC" stroke="#DCE5F0" stroke-width="1.5"/>
 
   <!-- Header -->
   <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    <text x="36" y="40" fill="#0F172A" font-size="18" font-weight="700">3 档委派力度：从“零打扰试水”到“强编排分工”自由切换</text>
+    <text x="36" y="40" fill="#0F172A" font-size="18" font-weight="700">3 档委派力度：从“被动路由”到“主助手统筹”</text>
     <rect x="898" y="19" width="186" height="26" rx="13" fill="#FFFFFF" stroke="#CBD5E1"/>
     <text x="991" y="36" text-anchor="middle" fill="#475569" font-size="11.5" font-weight="600">设置页顶部随时一键切换</text>
   </g>
@@ -58,15 +58,15 @@
     <text x="48" y="33" text-anchor="middle" fill="#495A8A" font-size="11.5" font-weight="700">强分工</text>
     <text x="312" y="33" text-anchor="end" fill="#58699B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">orchestrator</text>
 
-    <text x="20" y="68" fill="#0F172A" font-size="19" font-weight="800">编排者模式</text>
+    <text x="20" y="68" fill="#0F172A" font-size="19" font-weight="800">主助手统筹</text>
     <!-- Intensity Bar: 3/3 -->
     <rect x="20" y="80" width="90" height="6" rx="3" fill="#58699B"/>
     <rect x="116" y="80" width="90" height="6" rx="3" fill="#58699B"/>
     <rect x="212" y="80" width="90" height="6" rx="3" fill="#58699B"/>
 
-    <text x="20" y="114" fill="#0F172A" font-size="13" font-weight="700">主助手专职拆解、发单与验收</text>
-    <text x="20" y="138" fill="#475569" font-size="12.5">匹配的实质工作必须交给专长模型执行，</text>
-    <text x="20" y="157" fill="#475569" font-size="12.5">主助手专注方案统筹、极小改动与复核。</text>
+    <text x="20" y="114" fill="#0F172A" font-size="13" font-weight="700">主助手负责分工和验收</text>
+    <text x="20" y="138" fill="#475569" font-size="12.5">匹配的实质工作交给子助手执行。</text>
+    <text x="20" y="157" fill="#475569" font-size="12.5">不自动切换主助手模型，也不自动开启团队看板。</text>
 
     <rect x="20" y="174" width="292" height="28" rx="7" fill="#F2F3FA"/>
     <text x="32" y="192.5" fill="#3E4D7A" font-size="11.5"><tspan font-weight="700">适合：</tspan>大型项目、追求严格分工交付的场景</text>

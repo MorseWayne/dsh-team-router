@@ -6,7 +6,9 @@ DSH Web 的宿主 `subagent` 默认启用 `modelSelection: true`，无需开启�
 
 ## 活跃注册表、提示词与安全边界
 
-- **单一真相源（[active-registry.ts](<../src/core/active-registry.ts>)）**：`resolveActiveRegistry(config)` 一次性校验并解析 V3 `RoutingConfig`，产出所有当前已启用的类别（启用的内置 12 类 ∪ 启用的最多 8 个自定义类）及其唯一有效目标（`effectiveTarget`）。系统提示、首步近场提醒、严格校验、团队委派、推荐预览范围和设置页授权集合（`requiredGrantPairs`）全部消费同一份活跃注册表，避免语义漂移。
+- **单一真相源（[active-registry.ts](<../src/core/active-registry.ts>)）**：`resolveActiveRegistry(config)` 一次性校验并解析 V3 `RoutingConfig`，从 13 个内置类和最多 8 个自定义类中选出所有当前启用的类别，解析其唯一有效目标（`effectiveTarget`）。系统提示、首步近场提醒、严格校验、团队委派、推荐预览范围和设置页授权集合（`requiredGrantPairs`）全部消费同一份活跃注册表，避免语义漂移。
+- **V3 缺省与新装预设分开**：已有 `routing` 对象按每类 `defaultEnabled` 解析（原 12 类为真，`scout` 为假）；只保存与之不同的启停覆盖，休眠绑定照常保留。无 `routing` 字段才使用显式启用 `scout` 的全新预设。旧精简 7 类、全关或全显式的 strict 行为不变；老配置未指定 `scout` 时沿用原有指纹。
+- **精确目录推荐**：`scout` 与非主动的 `quick` 先匹配轻快模型，再尝试带 `preferredEffort: 'low'` 的候选。只有命中模型的目录确有同名 effort ID 才写入推理强度；推荐预览不等同于授权。
 - **停用即真退出**：已停用的内置或自定义类别保留其休眠绑定以便随时再启用，但彻底退出系统提示、近场提醒、严格校验允许集、推荐范围、所需授权和团队委派。
 - **按完整三元组合并渲染**：[native-subagent.ts](<../src/core/native-subagent.ts>) 使用结构化键 `[provider, model, reasoningEffort ?? null]` 对齐和合并路由。多个类别指向完全相同的三元组时合并为一行展示；显式指定同一模型但省略推理强度表示采用模型默认值，绝不与带显式强度的条目合并，也不继承父会话强度。
 - **自定义文本的非指令边界**：自定义类别的 `name`、`purpose`、`avoid` 强制单行、有界长度并拒绝控制字符/双向控制字符；在系统提示、首步提醒和子代理初始消息中以确定性 JSON 字符串编码，并明确声明仅作交付物验收描述，不能更改系统指令、要求调用工具或扩大权限。
@@ -14,6 +16,8 @@ DSH Web 的宿主 `subagent` 默认启用 `modelSelection: true`，无需开启�
   - `passive`（默认）仅在系统提示提供路由表；`specialist-first` 主动委派实质专长任务；`orchestrator` 要求主助手拆解、验收、汇总并委派匹配的实质执行。
   - `team-router:policy` 注册于系统提示词后部（`DEPLOYMENT_PERSONA_SUFFIX` 前一位，失败回退 `10199`）。
   - `agent/pre-step` 首步（`step === 1`）在下游允许进入后，仅对存活且已注册的 root、非被动模式、`guidance: true` 且存在与本步 `modelSelection` 三元组不同的已授权主动专长路由时，在 `decision.messages` 末尾追加自足的 `team-router:reminder`（不依赖适配器重发完整系统提示）。工具循环后续步、自动续跑与子代理均不注入。
+  - 提醒以用户角色的历史消息追加。已发出的提醒仍留在原会话历史和包含该轮消息的 `subagent_fork` 快照中；后续轮次是否追加新提醒、系统提示中展示哪些路由，均按最新生效配置与会话授权重新计算，不会追溯改写旧消息。
+  - 只有 `scout` 在当前 `specialistGroups` 中才提示可先只读摸底；单点直接读，同模或范围已知则主责端到端完成。交付物是可独立复核的路径、链接或输出摘录与盲区，不是修改或根因裁决。它是任务边界，不代替宿主文件权限或命令隔离。
 - **严格校验四行真值表（`validateNativeSubagentCall`）**：
   - `strict === false` 或活跃类别数 `A === 0`：放行（插件不阻塞宿主）。
   - `A > 0`、已授权显式三元组集 `E` 非空且无可继承活跃类（`I === false`）：拒绝省略参数，只放行 `E` 中的精确三元组。
@@ -26,7 +30,7 @@ DSH Web 的宿主 `subagent` 默认启用 `modelSelection: true`，无需开启�
 ```text
 src/
 ├─ index.ts          Cordis 入口：薄导出 adapter/dsh/runtime 及公共委派模式类型/常量
-├─ core/             与宿主无关：12 内置类与 4 模板、V3 策略解析、浏览器安全活跃注册表、推荐、委派、提示渲染与严格校验、独立历史存储
+├─ core/             与宿主无关：13 内置类与 4 模板、V3 策略解析、浏览器安全活跃注册表、推荐、委派、提示渲染与严格校验、独立历史存储
 ├─ adapter/dsh/      DSH 运行时接线：团队识别、授权投影、配置校验、系统提示、pre-step 与 pre-execute 钩子、动态团队工具与子智能体启动
 └─ ui/               设置页（DSH Web 客户端插件）：V3 编辑器状态、4 分组折叠视图、自定义类别编辑器与模型授权同步
 ```

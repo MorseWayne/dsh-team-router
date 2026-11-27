@@ -49,6 +49,19 @@ describe('V3 category routing through native DSH', { concurrency: false, timeout
     assert.deepEqual(h.errors, []);
   });
 
+  it('delivers read-only scout boundaries and evidence requirements to the authorized Team child', async t => {
+    const config = safeRouting(); config.builtins.scout = { enabled: true, binding: explicitTarget('fast') };
+    const h = await NativeHarness.create({ routing: config }); t.after(() => h.close());
+    const lead = await h.lead(); h.authorize(lead);
+    const run = await h.delegate(lead, 'scout', 'mapper', 'Locate the sources and report gaps.');
+    const child = await h.child(lead, run.executionId); await h.idle(child, 1);
+    const request = h.requests(child)[0]!;
+    assert.equal(request.model, 'fast');
+    const prompt = JSON.stringify(request.messages);
+    assert.match(prompt, /Read-only: cite brief path:line, URL or output excerpts and gaps/);
+    assert.match(prompt, /No edits, state-changing commands, complex diagnoses or architecture decisions/);
+  });
+
   // The rc.3 provider used MALFORMED_RESPONSE; rc.4 introduced a dedicated refusal code.
   const refusalCode = Object.hasOwn(LLM_FAILURE_CODES, 'CONTENT_REFUSED') ? 'CONTENT_REFUSED' : 'MALFORMED_RESPONSE';
   it(`audits ${refusalCode} as a failed native delegation without trying another model`, async (t) => {

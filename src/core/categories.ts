@@ -9,7 +9,7 @@ export type BuiltinGroupId = keyof typeof BUILTIN_GROUPS;
 export const BUILTIN_IDS = Object.freeze([
   'visual-engineering', 'frontend-engineering', 'backend-data', 'deep',
   'debugging', 'code-review', 'verification-automation',
-  'ultrabrain', 'artistry', 'writing', 'quick', 'unspecified',
+  'ultrabrain', 'artistry', 'writing', 'scout', 'quick', 'unspecified',
 ] as const);
 export type BuiltinId = typeof BUILTIN_IDS[number];
 
@@ -26,6 +26,8 @@ export interface BuiltinCategory {
   readonly group: BuiltinGroupId;
   readonly proactive: boolean;
   readonly classic7: boolean;
+  /** Enabled when omitted from an existing V3 config (not the new-install preset). */
+  readonly defaultEnabled: boolean;
   readonly zh: BuiltinCategoryText;
   readonly en: BuiltinCategoryText;
 }
@@ -35,8 +37,8 @@ function localized([name, purpose, shortPurpose, avoid, example, deliverableChec
   return Object.freeze({ name, purpose, shortPurpose, avoid, example, deliverableCheck });
 }
 function category(id: BuiltinId, group: BuiltinGroupId, proactive: boolean, classic7: boolean,
-  zh: BuiltinText, en: BuiltinText): BuiltinCategory {
-  return Object.freeze({ id, group, proactive, classic7, zh: localized(zh), en: localized(en) });
+  zh: BuiltinText, en: BuiltinText, defaultEnabled = true): BuiltinCategory {
+  return Object.freeze({ id, group, proactive, classic7, defaultEnabled, zh: localized(zh), en: localized(en) });
 }
 
 export const BUILTINS: Readonly<Record<BuiltinId, BuiltinCategory>> = Object.freeze({
@@ -70,6 +72,9 @@ export const BUILTINS: Readonly<Record<BuiltinId, BuiltinCategory>> = Object.fre
   writing: category('writing', 'analysis', true, true,
     ['技术写作', '撰写技术文档、说明、文章和结构化文字。', '文档与结构化文字', '当主要交付是技术决策而非成文时，选架构与困难推理。', '将命令说明整理为运维手册。', '交付面向读者的文稿，核对关键技术事实并注明未核实项。'],
     ['Technical writing', 'Produce technical documentation, explanations, articles, and organized prose.', 'Documentation and prose', 'Use ultrabrain when the primary result is a technical decision.', 'Organize command explanations into an operations manual.', 'Deliver audience-ready text; verify technical claims and flag unknowns.']),
+  scout: category('scout', 'analysis', true, false,
+    ['信息侦察', '只读搜集代码细节与调用链、环境配置、长日志关键报错或文档出处，整理成精简证据清单。', '只读摸底与证据清单', '单点已知文件或值直接读取；不改代码，不运行改变状态的命令，不判断复杂根因或架构取舍。', '追踪配置从声明到生效的路径，标出日志证据和缺口。', '只读：附 path:line、URL 或命令输出摘录及盲区；不改代码，不下复杂根因结论。'],
+    ['Information scout', 'Gather read-only facts from code and call chains, environment settings, key errors in long logs, or documentation sources.', 'Read-only evidence collection', 'Read one known file/value directly. No edits, state-changing commands, complex diagnoses or architecture decisions.', 'Trace a setting from declaration to use; cite the log evidence and gaps.', 'Read-only: cite brief path:line, URL or output excerpts and gaps; no edits or complex diagnosis.'], false),
   quick: category('quick', 'general', false, true,
     ['定向小任务', '完成做法明确、边界小、验收简单的改动或提取。', '明确且可快速验收', '描述短不代表任务简单，须明确范围和验收标准。', '更新指定配置值并检查生效。', '说明改动或提取结果及一项直接验收检查。'],
     ['Bounded quick task', 'Make a small change or extraction with a known approach and simple check.', 'Small, well-defined change', 'A short prompt is not necessarily a small task; require clear bounds.', 'Set the specified config value and confirm it takes effect.', 'Show the requested result and one direct check.']),
@@ -100,8 +105,8 @@ function template(templateId: CustomCategoryTemplate['templateId'], zh: Template
 }
 export const CUSTOM_CATEGORY_TEMPLATES: readonly CustomCategoryTemplate[] = Object.freeze([
   template('evidence-check',
-    ['证据核验', '核验指定版本 API 或文档，提供出处并注明不确定项。', '不用于只需整理手册的任务。', '核对指定版本事件参数的文档和源码定义。', '只整理手册时选 writing。'],
-    ['Evidence verification', 'Verify specific-version APIs or docs with sources and remaining uncertainties.', 'Not for simply organizing a manual.', 'Check the documented event payload against the source for a given release.', 'Use writing to organize a manual.']),
+    ['证据核验', '交叉核验具体主张：分别列出支持、矛盾和未证实之处及出处。', '不用于开放式搜集事实或整理手册。', '核对指定版本事件参数的文档和源码定义。', '只搜集事实选 scout；整理手册选 writing。'],
+    ['Evidence verification', 'Cross-check a specific claim against sources; report supporting, conflicting and unverified points.', 'Not for open-ended fact gathering or organizing a manual.', 'Check the documented event payload against the source for a given release.', 'Use scout to collect facts or writing to organize a manual.']),
   template('security-audit',
     ['防御性安全审计', '提供风险位置、受影响边界、证据和缓解建议。', '不用于常规代码修改。', '审查权限边界并给出防御性缓解建议。', '常规修改时选相应工程类。'],
     ['Defensive security audit', 'Report risk locations, affected boundaries, evidence, and mitigations.', 'Not for routine code changes.', 'Review a permission boundary and recommend defensive mitigations.', 'Use the relevant engineering category for routine changes.']),
