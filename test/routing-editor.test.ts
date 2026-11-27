@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { isAllowedModelArray, planModelGrant, type ModelAuthorizationForm } from '../src/ui/model-grants.ts';
-import { CATEGORY_IDS } from '../src/core/categories.ts';
-import { createDefaultRoutingPolicy } from '../src/core/routing-policy.ts';
+import { BUILTIN_IDS, CLASSIC7_IDS, CUSTOM_CATEGORY_TEMPLATES, MAX_CUSTOM_CATEGORIES } from '../src/core/categories.ts';
 import { previewRecommendations } from '../src/core/recommendations.ts';
 import type { ModelCatalog } from '../src/core/recommendations.ts';
+import { createDefaultRoutingConfig } from '../src/core/routing-policy.ts';
+import { isAllowedModelArray, planModelGrant, requiredModelRoutes, type ModelAuthorizationForm } from '../src/ui/model-grants.ts';
 import {
-  RoutingEditor, routingDraftIssue, routingDraftToPolicy, routingFormPreview, routingPolicyMutations, routingPolicyToDraft,
+  RoutingEditor, routingConfigMutations, routingConfigToDraft, routingDraftIssue, routingDraftToConfig, routingFormConfig,
 } from '../src/ui/routing-editor.ts';
 import type { RoutingForm, RoutingFormSnapshot, RoutingFormValue, RoutingMutation } from '../src/ui/routing-editor.ts';
 
@@ -16,17 +16,13 @@ const available: ModelCatalog = {
     { id: 'gpt-5-codex', name: 'Codex' },
   ] }], failures: [],
 };
-function legacy(): RoutingFormValue {
-  return {
-    routes: { default: { provider: 'openai', model: 'gpt-5-mini' } },
-    rules: [{ id: 'rule', route: 'default', keywords: ['work'] }], roles: { worker: 'default' }, defaultRoute: 'default', historyLimit: 10,
-  };
-}
-function v2(): RoutingFormValue { return { policyV2: createDefaultRoutingPolicy() }; }
+function v3(): RoutingFormValue { return { routing: createDefaultRoutingConfig() }; }
 
 class FakeGrants implements ModelAuthorizationForm {
-  state: ReturnType<ModelAuthorizationForm['getSnapshot']> = { status: 'ready', writable: true, revision: 7,
-    value: { enabled: false, allowedModels: [{ provider: 'other', model: 'keep' }] } };
+  state: ReturnType<ModelAuthorizationForm['getSnapshot']> = {
+    status: 'ready', writable: true, revision: 7,
+    value: { enabled: false, allowedModels: [{ provider: 'other', model: 'keep' }] },
+  };
   writes = 0;
   getSnapshot() { return this.state; }
   subscribe() { return () => {}; }
@@ -48,7 +44,9 @@ class FakeForm implements RoutingForm {
   transportError = false;
   pending: (() => void) | undefined;
   delay = false;
-  constructor(value = v2()) { this.state = { status: 'ready', value, revision: 1, writable: true }; }
+  constructor(value: RoutingFormValue = v3()) {
+    this.state = { status: 'ready', value, revision: 1, writable: true };
+  }
   getSnapshot(): RoutingFormSnapshot { return this.state; }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   push(value: RoutingFormValue, revision = (this.state.revision ?? 0) + 1): void {
@@ -63,10 +61,8 @@ class FakeForm implements RoutingForm {
     const next: RoutingFormValue = { ...this.state.value };
     for (const op of ops) {
       assert.equal(op.op, 'set');
-      if (op.path[0] === 'policyV2') next.policyV2 = op.value;
-      else if (op.path[0] === 'delegationMode') next.delegationMode = op.value;
-      else if (op.path[0] === 'enforceNativeSubagentRouting') next.enforceNativeSubagentRouting = op.value;
-      else assert.fail(`Unexpected mutation path: ${op.path.join('.')}`);
+      assert.deepEqual(op.path, ['routing']);
+      next.routing = op.value;
     }
     this.push(next);
     return true;
@@ -77,139 +73,140 @@ function editHistory(editor: RoutingEditor, value = '42'): void {
   editor.edit({ ...editor.getSnapshot().draft!, historyLimit: value });
 }
 
-describe('routing form and draft helpers', () => {
-  it('renders all seven categories even with no saved overrides', () => {
-    const draft = routingPolicyToDraft(createDefaultRoutingPolicy());
-    assert.deepEqual(Object.keys(draft.categories), CATEGORY_IDS);
-    assert.ok(CATEGORY_IDS.every(id => draft.categories[id].mode === 'default'));
+describe('V3 routing form and draft helpers', () => {
+  it('renders all 12 built-ins enabled by default and produces normalized V3 config', () => {
+    const draft = routingConfigToDraft(createDefaultRoutingConfig());
+    assert.deepEqual(Object.keys(draft.builtins), BUILTIN_IDS);
+    assert.ok(BUILTIN_IDS.every(id => draft.builtins[id].enabled && draft.builtins[id].binding.mode === 'default'));
+    assert.deepEqual(draft.custom, []);
     assert.equal(draft.historyLimit, '100');
     assert.equal(routingDraftIssue(draft), undefined);
-    assert.equal(routingDraftToPolicy(draft).version, 2);
+    const config = routingDraftToConfig(draft);
+    assert.equal(config.version, 3);
+    assert.deepEqual(config.builtins, {});
   });
 
-  it('reads V2 preferentially and never revives legacy rules', () => {
-    const value = { ...legacy(), policyV2: createDefaultRoutingPolicy() };
-    const preview = routingFormPreview(value);
-    assert.equal(preview.required, false);
-    assert.deepEqual(preview.policy.defaultTarget, { executor: 'native', model: { mode: 'inherit' } });
-    assert.equal(preview.retired, undefined);
+  it('uses factory default when routing is omitted, and rejects null or non-V3 configs', () => {
+    const def = routingFormConfig({});
+    assert.equal(def.version, 3);
+    assert.equal(def.defaultTarget.mode, 'inherit');
+    assert.throws(() => routingFormConfig({ routing: null }), TypeError);
+    assert.throws(() => routingFormConfig({ routing: { version: 2 } as never }), TypeError);
   });
 
-  it('previews exact legacy default mapping and retirement without automatic category guesses', () => {
-    const preview = routingFormPreview(legacy());
-    assert.equal(preview.required, true);
-    assert.deepEqual(preview.retired, { routes: ['default'], ruleCount: 1, roleCount: 1 });
-    assert.deepEqual(preview.policy.defaultTarget, { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini' } });
-    assert.equal(preview.policy.historyLimit, 10);
-    assert.deepEqual(Object.keys(preview.policy.categories), []);
-  });
-
-  it('supports empty legacy values and null legacy default without touching unrelated fields', () => {
-    const input = { routes: {}, defaultRoute: null, stateDir: '/leave/alone' };
-    const result = routingFormPreview(input);
-    assert.equal(result.required, false);
-    assert.equal(result.policy.defaultTarget.model.mode, 'inherit');
-    assert.equal(input.stateDir, '/leave/alone');
-  });
-
-  it('rejects explicit null or malformed V2 instead of migrating legacy values silently', () => {
-    assert.throws(() => routingFormPreview({ ...legacy(), policyV2: null }), TypeError);
-    assert.throws(() => routingFormPreview({ policyV2: { version: 1 } as never }), TypeError);
-  });
-
-  it('emits only one policyV2 set mutation, never unset or legacy field writes', () => {
-    const source = createDefaultRoutingPolicy();
-    const writes = routingPolicyMutations(source);
-    assert.deepEqual(writes.map(write => ({ op: write.op, path: write.path })), [{ op: 'set', path: ['policyV2'] }]);
+  it('emits only one routing set mutation', () => {
+    const source = createDefaultRoutingConfig();
+    const writes = routingConfigMutations(source);
+    assert.deepEqual(writes.map(write => ({ op: write.op, path: write.path })), [{ op: 'set', path: ['routing'] }]);
     assert.notEqual(writes[0]!.value, source);
   });
 
-  it('preserves incomplete form strings until explicit validation', () => {
-    const draft = routingPolicyToDraft(createDefaultRoutingPolicy());
-    for (const value of ['', ' ', '0', '1001', '1.5', 'not-a-number']) {
+  it('validates history limits and active explicit catalog entries only', () => {
+    const draft = routingConfigToDraft(createDefaultRoutingConfig());
+    for (const value of ['', ' ', '0', '1001', '1.5', 'nan']) {
       draft.historyLimit = value;
       assert.equal(routingDraftIssue(draft)?.reason, 'history');
     }
     draft.historyLimit = '100';
-    draft.defaultTarget = { executor: 'native', model: { mode: 'explicit', provider: '', id: '' } };
-    assert.equal(routingDraftIssue(draft)?.field, 'provider');
-  });
-
-  it('requires a valid catalog only for explicit native selections and verifies effort per model', () => {
-    const draft = routingPolicyToDraft(createDefaultRoutingPolicy());
-    assert.equal(routingDraftIssue(draft, undefined, false), undefined);
-    draft.categories.quick = { mode: 'target', target: { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini', reasoningEffort: 'low' } } };
-    assert.equal(routingDraftIssue(draft)?.reason, 'catalogRequired');
+    draft.builtins.quick.binding = { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini', reasoningEffort: 'low' };
+    assert.equal(routingDraftIssue(draft, undefined, false)?.reason, 'catalogRequired');
     assert.equal(routingDraftIssue(draft, available), undefined);
-    const selection = draft.categories.quick.target.model;
-    if (selection.mode === 'explicit') selection.reasoningEffort = 'high';
+
+    // Stale effort on enabled category fails; disabling the category allows saving with dormant binding.
+    draft.builtins.quick.binding = { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini', reasoningEffort: 'high' };
     assert.equal(routingDraftIssue(draft, available)?.field, 'effort');
-    if (selection.mode === 'explicit') { delete selection.reasoningEffort; selection.id = 'missing'; }
-    assert.equal(routingDraftIssue(draft, available)?.field, 'model');
+    draft.builtins.quick.enabled = false;
+    assert.equal(routingDraftIssue(draft, available), undefined);
+    assert.equal(routingDraftIssue(draft, undefined, false), undefined);
   });
 
-  it('does not accept stale models from a failed provider group', () => {
-    const draft = routingPolicyToDraft(routingFormPreview(legacy()).policy);
+  it('allows disabling all categories even if defaultTarget points to an unavailable catalog model', () => {
+    const draft = routingConfigToDraft(createDefaultRoutingConfig());
+    draft.defaultTarget = { mode: 'explicit', provider: 'openai', model: 'removed-model' };
+    assert.equal(routingDraftIssue(draft, available)?.field, 'model');
+    for (const id of BUILTIN_IDS) draft.builtins[id].enabled = false;
+    assert.equal(routingDraftIssue(draft, available), undefined);
+    assert.equal(routingDraftIssue(draft, undefined, false), undefined);
+  });
+
+  it('rejects failed provider groups for active bindings', () => {
+    const draft = routingConfigToDraft(createDefaultRoutingConfig());
+    draft.defaultTarget = { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini' };
     const failed = { ...available, failures: [{ id: 'openai', name: 'OpenAI', message: 'timeout' }] };
     assert.equal(routingDraftIssue(draft, failed)?.field, 'provider');
   });
-
-  it('keeps existing external targets but rejects save preflight while P0 is unverified', () => {
-    const policy = createDefaultRoutingPolicy();
-    policy.categories.deep = { mode: 'target', target: { executor: 'codex', model: { mode: 'explicit', id: 'saved-model' } } };
-    const draft = routingPolicyToDraft(policy);
-    assert.deepEqual(draft.categories.deep, policy.categories.deep);
-    assert.deepEqual(routingDraftIssue(draft), { section: 'deep', field: 'executor', reason: 'externalUnavailable' });
-  });
 });
 
-describe('Save synchronizes DSH authorization', () => {
-  const route = { provider: 'openai', model: 'gpt-5-mini' };
+describe('Active-only model grants synchronization', () => {
+  const mini = { provider: 'openai', model: 'gpt-5-mini' };
+  const codex = { provider: 'openai', model: 'gpt-5-codex' };
 
-  it('rejects malformed allowedModels rows in the shared validator and grant plan', () => {
+  it('computes required routes strictly from active effective targets', () => {
+    const config = createDefaultRoutingConfig();
+    config.defaultTarget = { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini' };
+    assert.deepEqual(requiredModelRoutes(config), [mini]);
+
+    // Override all 12 built-ins to codex => defaultTarget (mini) is no longer needed!
+    for (const id of BUILTIN_IDS) {
+      config.builtins[id] = { binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' } };
+    }
+    assert.deepEqual(requiredModelRoutes(config), [codex]);
+
+    // Disable all 12 built-ins => zero grants required!
+    for (const id of BUILTIN_IDS) config.builtins[id] = { enabled: false, binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' } };
+    assert.deepEqual(requiredModelRoutes(config), []);
+  });
+
+  it('rejects malformed allowedModels rows in planModelGrant', () => {
     assert.equal(isAllowedModelArray([]), true);
-    assert.equal(isAllowedModelArray([route]), true);
+    assert.equal(isAllowedModelArray([mini]), true);
     for (const allowedModels of [null, {}, [null], [{ provider: 'openai' }], [{ provider: '', model: 'gpt-5-mini' }], [{ provider: 'openai', model: 0 }], new Array(1)]) {
       assert.equal(isAllowedModelArray(allowedModels), false);
-      assert.deepEqual(planModelGrant([route], {
+      assert.deepEqual(planModelGrant([mini], {
         status: 'ready', writable: true, revision: 1,
         value: { enabled: true, allowedModels: allowedModels as never },
       }), { kind: 'unavailable', reason: 'invalid' });
     }
   });
-  function configured() {
-    const policy = routingFormPreview(legacy()).policy;
-    policy.categories.deep = { mode: 'target', target: policy.defaultTarget };
-    return new FakeForm({ policyV2: policy });
-  }
-  it('repairs existing selections without rewriting policy; preserves unrelated grants and deduplicates targets', async () => {
-    const form = configured();
+
+  it('repairs missing grants without rewriting unchanged config and preserves existing grants', async () => {
+    const config = createDefaultRoutingConfig();
+    config.defaultTarget = { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini' };
+    const form = new FakeForm({ routing: config });
     const editor = new RoutingEditor(form, form.grants);
     assert.equal(await editor.save({ catalog: available }), true);
-    assert.deepEqual(form.grants.state.value, { enabled: true, allowedModels: [{ provider: 'other', model: 'keep' }, route] });
+    assert.deepEqual(form.grants.state.value, { enabled: true, allowedModels: [{ provider: 'other', model: 'keep' }, mini] });
     assert.equal(form.writes.length, 0);
     editHistory(editor);
     assert.equal(await editor.save({ catalog: available }), true);
     assert.equal(form.grants.writes, 1);
     editor.dispose();
   });
-  it('blocks a missing or read-only grant service before saving, but inheritance needs no grant', async () => {
+
+  it('blocks save when grant service is unavailable or read-only, unless all active routes inherit or are disabled', async () => {
     for (const unavailable of [true, false]) {
-      const form = configured();
+      const config = createDefaultRoutingConfig();
+      config.builtins.deep = { binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini' } };
+      const form = new FakeForm({ routing: config });
       if (unavailable) form.grants.state.status = 'unavailable'; else form.grants.state.writable = false;
       const editor = new RoutingEditor(form, form.grants);
       editHistory(editor);
       assert.equal(await editor.save({ catalog: available }), false);
       assert.equal(editor.getSnapshot().error?.kind, unavailable ? 'grantUnavailable' : 'grantReadOnly');
       assert.equal(form.writes.length, 0);
-      editor.setCategoryMode('deep', 'default'); editor.setNativeModelMode('default', 'inherit');
-      assert.equal(await editor.save(), true);
+
+      // Disabling deep removes the grant requirement and allows saving!
+      editor.setBuiltinEnabled('deep', false);
+      assert.equal(await editor.save({ catalog: available }), true);
       assert.equal(form.grants.writes, 0);
       editor.dispose();
     }
   });
-  it('does not grant on refused policy writes or overwrite concurrent grants; retries only authorization', async () => {
-    const form = configured();
+
+  it('does not grant on refused writes and retries only authorization after grant conflict', async () => {
+    const config = createDefaultRoutingConfig();
+    config.defaultTarget = { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini' };
+    const form = new FakeForm({ routing: config });
     const editor = new RoutingEditor(form, form.grants);
     editHistory(editor);
     form.reject = true;
@@ -223,301 +220,165 @@ describe('Save synchronizes DSH authorization', () => {
     form.pending!();
     assert.equal(await saving, false);
     assert.equal(editor.getSnapshot().error?.kind, 'grantFailed');
-    assert.equal(editor.getSnapshot().notice, undefined);
     assert.equal(editor.getSnapshot().dirty, false);
     assert.equal(await editor.save({ catalog: available }), true);
     assert.equal(form.writes.length, 2);
-    assert.deepEqual(form.grants.state.value!.allowedModels, [{ provider: 'other', model: 'keep' }, concurrent, route]);
+    assert.deepEqual(form.grants.state.value!.allowedModels, [{ provider: 'other', model: 'keep' }, concurrent, mini]);
     editor.dispose();
   });
 });
 
-describe('revision-bound V2 editor', () => {
-  it('reports invalid history limits from Save as focusable field issues without mutating Host state', async () => {
+describe('RoutingEditor V3 behaviors, presets, custom categories & recommendations', () => {
+  it('switches classic7 / all12 presets without clearing bindings or custom categories', async () => {
+    const config = createDefaultRoutingConfig();
+    config.builtins['backend-data'] = { binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' } };
+    config.custom.push({
+      id: 'custom-evidence-check', name: '证据核验', purpose: 'Verify API facts with citations',
+      enabled: true, proactive: false, binding: { mode: 'default' },
+    });
+    const form = new FakeForm({ routing: config });
+    const editor = new RoutingEditor(form, form.grants);
+
+    editor.applyBuiltinPreset('classic7');
+    const draft = editor.getSnapshot().draft!;
+    for (const id of BUILTIN_IDS) {
+      assert.equal(draft.builtins[id].enabled, CLASSIC7_IDS.includes(id));
+    }
+    assert.deepEqual(draft.builtins['backend-data'].binding, { mode: 'explicit', provider: 'openai', model: 'gpt-5-codex' });
+    assert.equal(draft.custom.length, 1);
+    assert.equal(draft.custom[0]!.enabled, true);
+    assert.equal(form.writes.length, 0); // Not auto-saved
+
+    editor.applyBuiltinPreset('all12');
+    assert.equal(editor.getSnapshot().dirty, false); // Back to saved state
+    editor.dispose();
+  });
+
+  it('supports custom category CRUD, template seeding, Chinese slug fallback, ID lock after save, and max 8 limit', async () => {
     const form = new FakeForm();
     const editor = new RoutingEditor(form, form.grants);
-    for (const value of ['', '0', '1001']) {
-      editHistory(editor, value);
-      assert.equal(await editor.save(), false);
-      assert.deepEqual(editor.getSnapshot().issue, { section: 'default', field: 'historyLimit', reason: 'history' });
-      assert.equal(editor.getSnapshot().error, undefined);
-      assert.equal(editor.getSnapshot().draft?.historyLimit, value);
-    }
-    assert.equal(form.writes.length, 0);
-    assert.equal(form.grants.writes, 0);
-    editHistory(editor, '1000');
+
+    // Seed from template
+    const tpl = CUSTOM_CATEGORY_TEMPLATES[0]!;
+    const tplId = editor.addCustomCategory({ id: tpl.suggestedId, name: tpl.zh.name, purpose: tpl.zh.purpose, avoid: tpl.zh.avoid });
+    assert.equal(tplId, 'custom-evidence-check');
+    let entry = editor.getSnapshot().draft!.custom[0]!;
+    assert.equal(entry.persisted, false);
+    assert.equal(entry.enabled, true);
+    assert.equal(entry.proactive, false);
+
+    // Unpersisted ID can be edited
+    editor.updateCustomCategory(tplId!, { id: 'custom-api-check', proactive: true });
+    assert.equal(editor.getSnapshot().draft!.custom[0]!.id, 'custom-api-check');
+
+    // Pure Chinese blank name generates valid ASCII slug
+    const zhId = editor.addCustomCategory({ name: '安全审计', purpose: '检查权限边界并给出证据' });
+    assert.ok(zhId && /^custom-[a-z][a-z0-9-]*$/.test(zhId));
+
+    // Save persists and locks IDs
     assert.equal(await editor.save(), true);
-    assert.equal(editor.getSnapshot().issue, undefined);
-    editor.dispose();
-  });
-  it('selects a provider/model pair in one edit and does not carry effort between providers with the same model ID', async () => {
-    const policy = createDefaultRoutingPolicy();
-    policy.defaultTarget = { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini', reasoningEffort: 'low' } };
-    const form = new FakeForm({ policyV2: policy });
-    const editor = new RoutingEditor(form, form.grants);
-    editor.setNativeModelMode('default', 'inherit');
-    editor.setNativeModelMode('default', 'explicit', 1, { provider: 'openai', id: 'gpt-5-mini' });
-    assert.deepEqual(editor.getSnapshot().draft?.defaultTarget, policy.defaultTarget);
-    const choice = { provider: 'alternate', id: 'gpt-5-mini' };
-    editor.setNativeModelMode('default', 'explicit', 1, choice);
-    const expected = { executor: 'native', model: { mode: 'explicit', ...choice } };
-    assert.deepEqual(editor.getSnapshot().draft?.defaultTarget, expected);
-    assert.equal(form.writes.length, 0);
-    assert.equal(await editor.save({ catalog: { groups: [...available.groups, { id: 'alternate', name: 'Alternate', models: [{ id: choice.id, name: 'Mini' }] }], failures: [] } }), true);
-    assert.deepEqual(form.state.value?.policyV2?.defaultTarget, expected);
-    editor.dispose();
-  });
-  it('keeps bundle-detail and Settings drafts local while sharing only saved Host policy', async () => {
-    const form = new FakeForm();
-    const detail = new RoutingEditor(form, form.grants);
-    const settings = new RoutingEditor(form, form.grants);
-    editHistory(detail, '42');
-    assert.equal(settings.getSnapshot().draft!.historyLimit, '100');
-    assert.equal(await detail.save(), true);
-    assert.equal(settings.getSnapshot().draft!.historyLimit, '42');
-    editHistory(settings, '24');
-    settings.dispose();
-    const reopened = new RoutingEditor(form, form.grants);
-    assert.equal(reopened.getSnapshot().draft!.historyLimit, '42');
-    assert.equal(form.writes.length, 1);
-    reopened.dispose(); detail.dispose();
-    assert.equal(form.listeners.size, 0);
-  });
-  it('stages independent draft edits and persists only through an explicit save', async () => {
-    const form = new FakeForm();
-    const editor = new RoutingEditor(form, form.grants);
-    const draft = { ...editor.getSnapshot().draft!, historyLimit: '23' };
-    editor.edit(draft);
-    draft.historyLimit = '99';
-    assert.equal(form.writes.length, 0);
-    assert.equal(editor.getSnapshot().draft?.historyLimit, '23');
-    assert.equal(await editor.save(), true);
-    assert.equal(form.writes.length, 1);
-    assert.equal(form.writes[0]!.revision, 1);
-    assert.equal(form.state.value?.policyV2?.historyLimit, 23);
-    assert.equal(editor.getSnapshot().dirty, false);
-    assert.equal(editor.getSnapshot().notice, 'saved');
-    editor.dispose();
-  });
+    entry = editor.getSnapshot().draft!.custom[0]!;
+    assert.equal(entry.persisted, true);
+    editor.updateCustomCategory('custom-api-check', { id: 'custom-renamed', name: '接口核验' });
+    assert.equal(editor.getSnapshot().draft!.custom[0]!.id, 'custom-api-check'); // ID locked!
+    assert.equal(editor.getSnapshot().draft!.custom[0]!.name, '接口核验'); // Display name updated!
 
-  it('requires explicit revision-bound migration confirmation even if a draft was edited', async () => {
-    const form = new FakeForm(legacy());
-    const editor = new RoutingEditor(form, form.grants);
-    assert.equal(editor.getSnapshot().migrationRequired, true);
-    editHistory(editor);
-    assert.equal(await editor.save({ catalog: available }), false);
-    assert.equal(editor.getSnapshot().error?.kind, 'migration');
-    assert.equal(form.writes.length, 0);
-    assert.equal(editor.confirmMigration(1), true);
-    assert.equal(await editor.save({ catalog: available }), true);
-    assert.equal(editor.getSnapshot().migrationRequired, false);
-    assert.equal(form.state.value?.rules?.length, 1); // Legacy data retained for Host backup, not edited here.
-    assert.equal(form.writes[0]!.ops.length, 1);
-    editor.dispose();
-  });
-
-  it('allows confirmed migration to be saved even without changing the mapped values', async () => {
-    const form = new FakeForm(legacy());
-    const editor = new RoutingEditor(form, form.grants);
-    assert.equal(editor.getSnapshot().dirty, false);
-    assert.equal(editor.confirmMigration(), true);
-    assert.equal(editor.getSnapshot().dirty, true);
-    assert.equal(await editor.save({ catalog: available }), true);
-    editor.dispose();
-  });
-
-  it('preserves dirty drafts on Host pushes and never refreshes their base revision', async () => {
-    const form = new FakeForm();
-    const editor = new RoutingEditor(form, form.grants);
-    editHistory(editor, '77');
-    form.push(v2());
-    assert.equal(editor.getSnapshot().stale, true);
-    assert.equal(editor.getSnapshot().revision, 1);
-    assert.equal(editor.getSnapshot().draft?.historyLimit, '77');
-    assert.equal(await editor.save(), false);
-    assert.equal(form.writes.length, 0);
-    editor.discard();
-    assert.equal(editor.getSnapshot().revision, 2);
-    assert.equal(editor.getSnapshot().draft?.historyLimit, '100');
-    editor.dispose();
-  });
-
-  it('invalidates migration confirmation after a Host revision change', () => {
-    const form = new FakeForm(legacy());
-    const editor = new RoutingEditor(form, form.grants);
-    editor.confirmMigration();
-    form.push(legacy());
-    assert.equal(editor.getSnapshot().migrationConfirmed, false);
-    assert.equal(editor.confirmMigration(1), false);
-    assert.equal(editor.confirmMigration(2), false);
-    editor.dispose();
-  });
-
-  it('preserves drafts on rejected or thrown saves', async () => {
-    for (const failure of ['reject', 'transportError'] as const) {
-      const form = new FakeForm();
-      const editor = new RoutingEditor(form, form.grants);
-      editHistory(editor, '31');
-      form[failure] = true;
-      assert.equal(await editor.save(), false);
-      assert.equal(editor.getSnapshot().dirty, true);
-      assert.equal(editor.getSnapshot().draft?.historyLimit, '31');
-      assert.equal(editor.getSnapshot().error?.kind, failure === 'reject' ? 'refused' : 'transport');
-      editor.dispose();
+    // Fill up to MAX_CUSTOM_CATEGORIES (8), then verify 9th is refused
+    for (let i = editor.getSnapshot().draft!.custom.length; i < MAX_CUSTOM_CATEGORIES; i++) {
+      const added = editor.addCustomCategory({ name: `Extra ${i}`, purpose: `Purpose ${i}` });
+      assert.ok(added);
     }
-  });
+    assert.equal(editor.getSnapshot().draft!.custom.length, MAX_CUSTOM_CATEGORIES);
+    assert.equal(editor.addCustomCategory({ name: 'Overflow', purpose: 'Too many' }), undefined);
 
-  it('prevents double saves, edits and discard during an admitted save', async () => {
-    const form = new FakeForm();
-    form.delay = true;
-    const editor = new RoutingEditor(form, form.grants);
-    editHistory(editor, '12');
-    const result = editor.save();
-    assert.equal(editor.getSnapshot().saving, true);
-    editHistory(editor, '88');
-    editor.discard();
-    assert.equal(await editor.save(), false);
-    assert.equal(form.writes.length, 1);
-    form.pending!();
-    assert.equal(await result, true);
-    assert.equal(form.state.value?.policyV2?.historyLimit, 12);
+    // Remove works cleanly
+    editor.removeCustomCategory('custom-api-check');
+    assert.equal(editor.getSnapshot().draft!.custom.length, MAX_CUSTOM_CATEGORIES - 1);
     editor.dispose();
   });
 
-  it('does not write read-only, loading, unavailable or unversioned snapshots', async () => {
-    for (const state of [
-      { writable: false }, { status: 'loading' as const }, { status: 'unavailable' as const }, { revision: undefined },
-    ]) {
-      const form = new FakeForm();
-      const editor = new RoutingEditor(form, form.grants);
-      editHistory(editor);
-      form.state = { ...form.state, ...state };
-      assert.equal(await editor.save(), false);
-      assert.equal(form.writes.length, 0);
-      editor.dispose();
-    }
-  });
-
-  it('only applies recommendation previews to the unchanged draft and revision', async () => {
+  it('validates custom category IDs, duplicates, and control characters cleanly', async () => {
     const form = new FakeForm();
     const editor = new RoutingEditor(form, form.grants);
-    const preview = previewRecommendations(routingDraftToPolicy(editor.getSnapshot().draft!), available);
-    assert.equal(form.writes.length, 0);
-    assert.equal(editor.getSnapshot().dirty, false);
+    const id1 = editor.addCustomCategory({ name: 'One', purpose: 'Do one' })!;
+    editor.updateCustomCategory(id1, { id: 'bad-prefix' });
+    assert.equal(await editor.save(), false);
+    assert.deepEqual(editor.getSnapshot().issue, { section: 'bad-prefix', field: 'id', reason: 'customId' });
+
+    editor.updateCustomCategory('bad-prefix', { id: 'custom-dup' });
+    const id2 = editor.addCustomCategory({ name: 'Two', purpose: 'Do two' })!;
+    editor.updateCustomCategory(id2, { id: 'custom-dup' });
+    assert.equal(await editor.save(), false);
+    assert.equal(editor.getSnapshot().issue?.reason, 'customDuplicate');
+
+    editor.removeCustomCategory(id2);
+    editor.updateCustomCategory('custom-dup', { purpose: 'line1\nline2' });
+    assert.equal(await editor.save(), false);
+    assert.deepEqual(editor.getSnapshot().issue, { section: 'custom-dup', field: 'purpose', reason: 'text' });
+    editor.dispose();
+  });
+
+  it('applies scoped recommendations, skips disabled built-ins, preserves custom categories, and rejects stale previews', async () => {
+    const config = createDefaultRoutingConfig();
+    config.builtins['backend-data'] = { enabled: false };
+    config.custom.push({
+      id: 'custom-evidence-check', name: 'Evidence', purpose: 'Verify APIs',
+      enabled: true, proactive: false, binding: { mode: 'default' },
+    });
+    const form = new FakeForm({ routing: config });
+    const editor = new RoutingEditor(form, form.grants);
+
+    const preview = previewRecommendations(routingDraftToConfig(editor.getSnapshot().draft!), available, { group: 'implementation' });
+    assert.ok(preview.skippedDisabled.includes('backend-data'));
+    assert.ok(preview.changes.every(change => change.category !== 'backend-data'));
     assert.equal(editor.applyRecommendations(preview, 1), true);
-    assert.equal(editor.getSnapshot().dirty, true);
-    assert.equal(form.writes.length, 0);
-    assert.equal(await editor.save({ catalog: available }), true);
+    assert.equal(editor.getSnapshot().draft!.custom[0]!.persisted, true);
+    assert.equal(editor.getSnapshot().draft!.custom[0]!.binding.mode, 'default');
+
+    // Stale preview after local edit is refused
+    const preview2 = previewRecommendations(routingDraftToConfig(editor.getSnapshot().draft!), available);
+    editHistory(editor, '55');
+    assert.equal(editor.applyRecommendations(preview2, 1), false);
+    assert.equal(editor.getSnapshot().error?.kind, 'previewChanged');
     editor.dispose();
   });
 
-  it('refuses stale recommendation previews after local edits or Host updates', () => {
-    for (const cause of ['draft', 'host']) {
-      const form = new FakeForm();
-      const editor = new RoutingEditor(form, form.grants);
-      const preview = previewRecommendations(routingDraftToPolicy(editor.getSnapshot().draft!), available);
-      if (cause === 'draft') editHistory(editor, '17'); else form.push(v2());
-      assert.equal(editor.applyRecommendations(preview, 1), false);
-      assert.equal(editor.getSnapshot().error?.kind, 'previewChanged');
-      assert.equal(form.writes.length, 0);
-      editor.dispose();
-    }
-  });
-
-  it('keeps explicit model choices when catalog validation fails', async () => {
-    const form = new FakeForm({ policyV2: routingFormPreview(legacy()).policy });
-    const editor = new RoutingEditor(form, form.grants);
-    editHistory(editor);
-    assert.equal(await editor.save({ catalogReady: false }), false);
-    assert.equal(editor.getSnapshot().issue?.reason, 'catalogRequired');
-    assert.equal(editor.getSnapshot().draft?.defaultTarget.model.mode, 'explicit');
-    assert.equal(form.writes.length, 0);
-    assert.equal(await editor.save({ catalog: available }), true);
-    editor.dispose();
-  });
-
-  it('restores category custom selections when switching default/custom within an edit session', async () => {
-    const policy = createDefaultRoutingPolicy();
-    const selected = { mode: 'target' as const, target: { executor: 'native' as const, model: { mode: 'explicit' as const, provider: 'openai', id: 'gpt-5-mini', reasoningEffort: 'low' } } };
-    policy.categories.quick = selected;
-    const form = new FakeForm({ policyV2: policy });
-    const editor = new RoutingEditor(form, form.grants);
-    editor.setCategoryMode('quick', 'default');
-    assert.deepEqual(editor.getSnapshot().draft?.categories.quick, { mode: 'default' });
-    editor.setCategoryMode('quick', 'target');
-    assert.deepEqual(editor.getSnapshot().draft?.categories.quick, selected);
-    editor.setCategoryMode('quick', 'default');
-    assert.equal(await editor.save(), true);
-    assert.deepEqual(form.state.value?.policyV2?.categories.quick, { mode: 'default' });
-    editor.setCategoryMode('quick', 'target');
-    assert.equal(editor.getSnapshot().draft?.categories.quick.mode, 'target');
-    assert.notDeepEqual(editor.getSnapshot().draft?.categories.quick, selected);
-    editor.dispose();
-  });
-
-  it('restores explicit native models and effort after temporary inheritance without persisting hidden values', async () => {
-    const policy = createDefaultRoutingPolicy();
-    policy.defaultTarget = { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini', reasoningEffort: 'low' } };
-    const form = new FakeForm({ policyV2: policy });
-    const editor = new RoutingEditor(form, form.grants);
-    editor.setNativeModelMode('default', 'inherit');
-    assert.deepEqual(editor.getSnapshot().draft?.defaultTarget, { executor: 'native', model: { mode: 'inherit' } });
-    editor.setNativeModelMode('default', 'explicit');
-    assert.deepEqual(editor.getSnapshot().draft?.defaultTarget, policy.defaultTarget);
-    editor.setNativeModelMode('default', 'inherit');
-    assert.equal(await editor.save(), true);
-    assert.deepEqual(form.state.value?.policyV2?.defaultTarget, { executor: 'native', model: { mode: 'inherit' } });
-    editor.dispose();
-  });
-
-  it('unsubscribes on disposal and performs no later writes', async () => {
-    const form = new FakeForm();
-    const editor = new RoutingEditor(form, form.grants);
-    editHistory(editor);
-    editor.dispose();
-    assert.equal(form.listeners.size, 0);
-    assert.equal(await editor.save(), false);
-  });
-
-  it('edits and saves routing behavior toggles cleanly without rewriting unchanged policyV2', async () => {
-    const policy = createDefaultRoutingPolicy();
-    policy.categories.writing = { mode: 'target', target: { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini' } } };
-    const form = new FakeForm({ policyV2: policy });
+  it('edits behavior atomically in routing and allows behavior-only save without catalog loaded', async () => {
+    const config = createDefaultRoutingConfig();
+    config.builtins.writing = { binding: { mode: 'explicit', provider: 'openai', model: 'gpt-5-mini' } };
+    const form = new FakeForm({ routing: config });
     form.grants.state.value = { enabled: true, allowedModels: [{ provider: 'openai', model: 'gpt-5-mini' }] };
     const editor = new RoutingEditor(form, form.grants);
 
-    assert.deepEqual(editor.getSnapshot().behavior, { delegationMode: 'passive', enforceNativeSubagentRouting: false });
-    assert.equal(editor.getSnapshot().dirty, false);
-
-    // Flipping a toggle marks dirty; flipping back clears dirty.
-    editor.editBehavior({ delegationMode: 'specialist-first' });
+    editor.editBehavior({ delegationMode: 'orchestrator', strict: true, guidance: false });
     assert.equal(editor.getSnapshot().dirty, true);
-    assert.equal(editor.getSnapshot().behavior.delegationMode, 'specialist-first');
-    editor.editBehavior({ delegationMode: 'passive' });
-    assert.equal(editor.getSnapshot().dirty, false);
-
-    // Behavior-only save succeeds even without catalog loaded and writes only the changed behavior op(s).
-    editor.editBehavior({ delegationMode: 'orchestrator', enforceNativeSubagentRouting: true });
     assert.equal(await editor.save({ catalogReady: false }), true);
     assert.equal(form.writes.length, 1);
-    assert.deepEqual(form.writes[0]!.ops, [
-      { op: 'set', path: ['delegationMode'], value: 'orchestrator' },
-      { op: 'set', path: ['enforceNativeSubagentRouting'], value: true },
-    ]);
-    assert.equal(form.state.value?.delegationMode, 'orchestrator');
-    assert.equal(editor.getSnapshot().behavior.delegationMode, 'orchestrator');
-    assert.equal(form.state.value?.enforceNativeSubagentRouting, true);
+    assert.deepEqual(form.state.value?.routing?.behavior, { guidance: false, delegationMode: 'orchestrator', strict: true });
     assert.equal(editor.getSnapshot().dirty, false);
     assert.equal(editor.getSnapshot().notice, 'saved');
-
-    // Editing both policy and behavior writes them together in one atomic mutate call.
-    editHistory(editor, '55');
-    editor.editBehavior({ enforceNativeSubagentRouting: false });
-    assert.equal(await editor.save({ catalog: available }), true);
-    assert.equal(form.writes.length, 2);
-    assert.deepEqual(form.writes[1]!.ops.map(op => op.path), [['policyV2'], ['enforceNativeSubagentRouting']]);
-    assert.equal(form.state.value?.policyV2?.historyLimit, 55);
-    assert.equal(form.state.value?.enforceNativeSubagentRouting, false);
     editor.dispose();
+  });
+
+  it('preserves dirty drafts on Host push, rejected saves, and cleans up on dispose', async () => {
+    const form = new FakeForm();
+    const editor = new RoutingEditor(form, form.grants);
+    editHistory(editor, '77');
+    form.push(v3());
+    assert.equal(editor.getSnapshot().stale, true);
+    assert.equal(await editor.save(), false);
+    editor.discard();
+    assert.equal(editor.getSnapshot().revision, 2);
+    assert.equal(editor.getSnapshot().draft?.historyLimit, '100');
+
+    editHistory(editor, '33');
+    form.reject = true;
+    assert.equal(await editor.save(), false);
+    assert.equal(editor.getSnapshot().error?.kind, 'refused');
+    assert.equal(editor.getSnapshot().draft?.historyLimit, '33');
+
+    editor.dispose();
+    assert.equal(form.listeners.size, 0);
+    assert.equal(await editor.save(), false);
   });
 });

@@ -1,0 +1,195 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 636" width="1120" height="636" role="img" aria-label="12 个内置类别与 4 张自定义场景模板全景图">
+  <!-- Outer Card -->
+  <rect x="1" y="1" width="1118" height="634" rx="18" fill="#F8FAFC" stroke="#DCE5F0" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <text x="36" y="40" fill="#0F172A" font-size="18" font-weight="700">分工全景：4 大工作组 12 个内置类别 + 最多 8 个自定义类别</text>
+    <!-- Legend -->
+    <rect x="752" y="19" width="154" height="26" rx="13" fill="#EEF4FB" stroke="#BDD2EC"/>
+    <text x="829" y="36" text-anchor="middle" fill="#2F598A" font-size="11.5" font-weight="600">精简7 = 精简 7 类预设包含</text>
+    <rect x="918" y="19" width="166" height="26" rx="13" fill="#E6F4F1" stroke="#A7D8CE"/>
+    <text x="1001" y="36" text-anchor="middle" fill="#1F5E54" font-size="11.5" font-weight="600">全 12 类均支持逐个启停</text>
+  </g>
+
+  <!-- Group 1: Product & Engineering (Top Left) -->
+  <g transform="translate(36, 66)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="514" height="206" rx="14" fill="#FFFFFF" stroke="#D5E2F1" stroke-width="1.4"/>
+    <path d="M 14 0 L 500 0 Q 514 0 514 14 L 514 40 L 0 40 L 0 14 Q 0 0 14 0 Z" fill="#EEF4FB"/>
+    <circle cx="22" cy="20" r="5" fill="#3B679E"/>
+    <text x="36" y="25" fill="#1E3A5F" font-size="14" font-weight="700">1. 产品与工程实现</text>
+    <text x="496" y="25" text-anchor="end" fill="#547DAE" font-size="11.5" font-weight="600">4 项 · 支持主动派单</text>
+
+    <!-- Row 1 -->
+    <g transform="translate(14, 50)">
+      <rect x="0" y="0" width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">视觉与交互</text>
+      <text x="90" y="20.5" fill="#547DAE" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">visual-engineering</text>
+      <text x="234" y="20.5" fill="#475569" font-size="12">页面布局、样式、动画与交互</text>
+      <rect x="434" y="6" width="44" height="20" rx="5" fill="#DCEBFA"/>
+      <text x="456" y="19.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
+    </g>
+    <!-- Row 2 -->
+    <g transform="translate(14, 88)">
+      <rect x="0" y="0" width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">前端工程</text>
+      <text x="90" y="20.5" fill="#547DAE" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">frontend-engineering</text>
+      <text x="246" y="20.5" fill="#475569" font-size="12">组件、状态流、缓存与渲染性能</text>
+    </g>
+    <!-- Row 3 -->
+    <g transform="translate(14, 126)">
+      <rect x="0" y="0" width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">后端与数据</text>
+      <text x="90" y="20.5" fill="#547DAE" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">backend-data</text>
+      <text x="196" y="20.5" fill="#475569" font-size="12">服务端接口、持久化、事务与数据管道</text>
+    </g>
+    <!-- Row 4 -->
+    <g transform="translate(14, 164)">
+      <rect x="0" y="0" width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">综合工程实施</text>
+      <text x="102" y="20.5" fill="#547DAE" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">deep</text>
+      <text x="148" y="20.5" fill="#475569" font-size="12">跨模块端到端工程实施与集成验证</text>
+      <rect x="434" y="6" width="44" height="20" rx="5" fill="#DCEBFA"/>
+      <text x="456" y="19.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
+    </g>
+  </g>
+
+  <!-- Group 2: Quality & Delivery (Top Right) -->
+  <g transform="translate(570, 66)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="514" height="206" rx="14" fill="#FFFFFF" stroke="#CBE5DF" stroke-width="1.4"/>
+    <path d="M 14 0 L 500 0 Q 514 0 514 14 L 514 40 L 0 40 L 0 14 Q 0 0 14 0 Z" fill="#EAF6F3"/>
+    <circle cx="22" cy="20" r="5" fill="#2E7D6F"/>
+    <text x="36" y="25" fill="#174D44" font-size="14" font-weight="700">2. 质量与交付</text>
+    <text x="496" y="25" text-anchor="end" fill="#2E7D6F" font-size="11.5" font-weight="600">3 项 · 支持主动派单</text>
+
+    <!-- Row 1 -->
+    <g transform="translate(14, 50)">
+      <rect x="0" y="0" width="486" height="34" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="21.5" fill="#0F172A" font-size="13" font-weight="700">故障诊断</text>
+      <text x="82" y="21.5" fill="#2E7D6F" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">debugging</text>
+      <text x="164" y="21.5" fill="#475569" font-size="12">复现故障、定位根因证据并做最小修复</text>
+    </g>
+    <!-- Row 2 -->
+    <g transform="translate(14, 92)">
+      <rect x="0" y="0" width="486" height="34" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="21.5" fill="#0F172A" font-size="13" font-weight="700">代码审查</text>
+      <text x="82" y="21.5" fill="#2E7D6F" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">code-review</text>
+      <text x="176" y="21.5" fill="#475569" font-size="12">只读审阅改动，输出位置、级别与证据</text>
+    </g>
+    <!-- Row 3 -->
+    <g transform="translate(14, 134)">
+      <rect x="0" y="0" width="486" height="34" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="21.5" fill="#0F172A" font-size="13" font-weight="700">验证与交付自动化</text>
+      <text x="128" y="21.5" fill="#2E7D6F" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">verification-automation</text>
+      <text x="304" y="21.5" fill="#475569" font-size="12">自动化测试、CI、构建与发布</text>
+    </g>
+    <!-- Footnote -->
+    <text x="22" y="191" fill="#2E7D6F" font-size="11.5">✦ 子助手交卷时附带清晰验收标准（复现证据 / 文件行号 / 可重跑命令）</text>
+  </g>
+
+  <!-- Group 3: Analysis & Expression (Bottom Left) -->
+  <g transform="translate(36, 288)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="514" height="164" rx="14" fill="#FFFFFF" stroke="#D8DDF0" stroke-width="1.4"/>
+    <path d="M 14 0 L 500 0 Q 514 0 514 14 L 514 40 L 0 40 L 0 14 Q 0 0 14 0 Z" fill="#F2F3FA"/>
+    <circle cx="22" cy="20" r="5" fill="#58699B"/>
+    <text x="36" y="25" fill="#2F3B61" font-size="14" font-weight="700">3. 分析与表达</text>
+    <text x="496" y="25" text-anchor="end" fill="#58699B" font-size="11.5" font-weight="600">3 项 · 支持主动派单</text>
+
+    <!-- Row 1 -->
+    <g transform="translate(14, 50)">
+      <rect x="0" y="0" width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">架构与困难推理</text>
+      <text x="116" y="20.5" fill="#58699B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">ultrabrain</text>
+      <text x="198" y="20.5" fill="#475569" font-size="12">困难架构、算法与多方案决策论证</text>
+      <rect x="434" y="6" width="44" height="20" rx="5" fill="#DCEBFA"/>
+      <text x="456" y="19.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
+    </g>
+    <!-- Row 2 -->
+    <g transform="translate(14, 88)">
+      <rect x="0" y="0" width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">创意探索</text>
+      <text x="84" y="20.5" fill="#58699B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">artistry</text>
+      <text x="156" y="20.5" fill="#475569" font-size="12">提出差异明显的新思路与创意方向</text>
+      <rect x="434" y="6" width="44" height="20" rx="5" fill="#DCEBFA"/>
+      <text x="456" y="19.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
+    </g>
+    <!-- Row 3 -->
+    <g transform="translate(14, 126)">
+      <rect x="0" y="0" width="486" height="32" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="20.5" fill="#0F172A" font-size="13" font-weight="700">技术写作</text>
+      <text x="84" y="20.5" fill="#58699B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">writing</text>
+      <text x="152" y="20.5" fill="#475569" font-size="12">面向读者的技术文档、手册与总结</text>
+      <rect x="434" y="6" width="44" height="20" rx="5" fill="#DCEBFA"/>
+      <text x="456" y="19.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
+    </g>
+  </g>
+
+  <!-- Group 4: General & Fallback (Bottom Right) -->
+  <g transform="translate(570, 288)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="514" height="164" rx="14" fill="#FFFFFF" stroke="#DCE2EA" stroke-width="1.4"/>
+    <path d="M 14 0 L 500 0 Q 514 0 514 14 L 514 40 L 0 40 L 0 14 Q 0 0 14 0 Z" fill="#F1F5F9"/>
+    <circle cx="22" cy="20" r="5" fill="#64748B"/>
+    <text x="36" y="25" fill="#334155" font-size="14" font-weight="700">4. 通用与兜底</text>
+    <text x="496" y="25" text-anchor="end" fill="#64748B" font-size="11.5" font-weight="600">2 项 · 仅被动（不主动催派）</text>
+
+    <!-- Row 1 -->
+    <g transform="translate(14, 52)">
+      <rect x="0" y="0" width="486" height="36" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="22.5" fill="#0F172A" font-size="13" font-weight="700">定向小任务</text>
+      <text x="90" y="22.5" fill="#64748B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">quick</text>
+      <text x="142" y="22.5" fill="#475569" font-size="12">做法明确、范围小、验收简单的改动</text>
+      <rect x="434" y="8" width="44" height="20" rx="5" fill="#DCEBFA"/>
+      <text x="456" y="21.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
+    </g>
+    <!-- Row 2 -->
+    <g transform="translate(14, 96)">
+      <rect x="0" y="0" width="486" height="36" rx="8" fill="#F8FAFC"/>
+      <text x="12" y="22.5" fill="#0F172A" font-size="13" font-weight="700">通用兜底</text>
+      <text x="80" y="22.5" fill="#64748B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">unspecified</text>
+      <text x="174" y="22.5" fill="#475569" font-size="12">确实不属以上任何类别的最后选择</text>
+      <rect x="434" y="8" width="44" height="20" rx="5" fill="#DCEBFA"/>
+      <text x="456" y="21.5" text-anchor="middle" fill="#2F598A" font-size="10.5" font-weight="700">精简7</text>
+    </g>
+    <text x="22" y="151" fill="#64748B" font-size="11.5">✦ 不触发主动委派提醒，防止小问题被无谓派单</text>
+  </g>
+
+  <!-- Custom Categories Section -->
+  <g transform="translate(36, 470)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="1048" height="142" rx="14" fill="#FFFFFF" stroke="#9BB7D9" stroke-width="1.5" stroke-dasharray="6 4"/>
+    <text x="20" y="29" fill="#0F172A" font-size="14.5" font-weight="700">自定义类别扩展区（最多 8 个）</text>
+    <text x="260" y="29" fill="#547DAE" font-size="12" font-weight="600">支持空白新建，或从以下 4 张内置场景模板卡一键起步</text>
+    <text x="1028" y="29" text-anchor="end" fill="#64748B" font-size="11.5">新建默认不主动派单 · 删改不影响历史</text>
+
+    <!-- Template 1 -->
+    <g transform="translate(20, 44)">
+      <rect x="0" y="0" width="242" height="82" rx="10" fill="#F8FAFC" stroke="#E2E8F0"/>
+      <text x="14" y="24" fill="#0F172A" font-size="13.5" font-weight="700">证据核验</text>
+      <text x="14" y="42" fill="#547DAE" font-size="11" font-family="'SFMono-Regular', Consolas, monospace">custom-evidence-check</text>
+      <text x="14" y="64" fill="#475569" font-size="11.5">查清指定版本 API 与文档出处</text>
+    </g>
+
+    <!-- Template 2 -->
+    <g transform="translate(275, 44)">
+      <rect x="0" y="0" width="242" height="82" rx="10" fill="#F8FAFC" stroke="#E2E8F0"/>
+      <text x="14" y="24" fill="#0F172A" font-size="13.5" font-weight="700">防御性安全审计</text>
+      <text x="14" y="42" fill="#2E7D6F" font-size="11" font-family="'SFMono-Regular', Consolas, monospace">custom-security-audit</text>
+      <text x="14" y="64" fill="#475569" font-size="11.5">输出风险位置、边界与缓解建议</text>
+    </g>
+
+    <!-- Template 3 -->
+    <g transform="translate(530, 44)">
+      <rect x="0" y="0" width="242" height="82" rx="10" fill="#F8FAFC" stroke="#E2E8F0"/>
+      <text x="14" y="24" fill="#0F172A" font-size="13.5" font-weight="700">数据与模型评测</text>
+      <text x="14" y="42" fill="#58699B" font-size="11" font-family="'SFMono-Regular', Consolas, monospace">custom-data-eval</text>
+      <text x="14" y="64" fill="#475569" font-size="11.5">实验结论、置信边界与指标设计</text>
+    </g>
+
+    <!-- Template 4 -->
+    <g transform="translate(785, 44)">
+      <rect x="0" y="0" width="243" height="82" rx="10" fill="#F8FAFC" stroke="#E2E8F0"/>
+      <text x="14" y="24" fill="#0F172A" font-size="13.5" font-weight="700">行为保持的重构迁移</text>
+      <text x="14" y="42" fill="#B47228" font-size="11" font-family="'SFMono-Regular', Consolas, monospace">custom-safe-migration</text>
+      <text x="14" y="64" fill="#475569" font-size="11.5">跨模块迁移、不变量与回滚方案</text>
+    </g>
+  </g>
+</svg>

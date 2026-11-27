@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 348" width="1120" height="348" role="img" aria-label="三种委派模式对比：被动路由、专长优先、编排者">
+  <!-- Outer Card -->
+  <rect x="1" y="1" width="1118" height="346" rx="18" fill="#F8FAFC" stroke="#DCE5F0" stroke-width="1.5"/>
+
+  <!-- Header -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <text x="36" y="40" fill="#0F172A" font-size="18" font-weight="700">3 档委派力度：从“零打扰试水”到“强编排分工”自由切换</text>
+    <rect x="898" y="19" width="186" height="26" rx="13" fill="#FFFFFF" stroke="#CBD5E1"/>
+    <text x="991" y="36" text-anchor="middle" fill="#475569" font-size="11.5" font-weight="600">设置页顶部随时一键切换</text>
+  </g>
+
+  <!-- Card 1: Passive -->
+  <g transform="translate(36, 64)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="332" height="218" rx="14" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.5"/>
+    <rect x="20" y="18" width="52" height="22" rx="6" fill="#F1F5F9"/>
+    <text x="46" y="33" text-anchor="middle" fill="#475569" font-size="11.5" font-weight="700">默认</text>
+    <text x="312" y="33" text-anchor="end" fill="#64748B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">passive</text>
+
+    <text x="20" y="68" fill="#0F172A" font-size="19" font-weight="800">被动路由</text>
+    <!-- Intensity Bar: 1/3 -->
+    <rect x="20" y="80" width="90" height="6" rx="3" fill="#547DAE"/>
+    <rect x="116" y="80" width="90" height="6" rx="3" fill="#E2E8F0"/>
+    <rect x="212" y="80" width="90" height="6" rx="3" fill="#E2E8F0"/>
+
+    <text x="20" y="114" fill="#0F172A" font-size="13" font-weight="700">不主动催派单，不追加每轮提醒</text>
+    <text x="20" y="138" fill="#475569" font-size="12.5">仅在主助手自己决定调用 subagent 时，</text>
+    <text x="20" y="157" fill="#475569" font-size="12.5">才按照路由表自动选对应专长模型。</text>
+
+    <rect x="20" y="174" width="292" height="28" rx="7" fill="#F8FAFC"/>
+    <text x="32" y="192.5" fill="#475569" font-size="11.5"><tspan font-weight="700" fill="#334155">适合：</tspan>刚安装体验、希望零打扰的用户</text>
+  </g>
+
+  <!-- Card 2: Specialist-first (Highlighted) -->
+  <g transform="translate(394, 64)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="332" height="218" rx="14" fill="#FFFFFF" stroke="#3B8276" stroke-width="2"/>
+    <rect x="20" y="18" width="70" height="22" rx="6" fill="#E6F4F1"/>
+    <text x="55" y="33" text-anchor="middle" fill="#1F5E54" font-size="11.5" font-weight="700">日常推荐</text>
+    <text x="312" y="33" text-anchor="end" fill="#2E7D6F" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">specialist-first</text>
+
+    <text x="20" y="68" fill="#0F172A" font-size="19" font-weight="800">专长优先</text>
+    <!-- Intensity Bar: 2/3 -->
+    <rect x="20" y="80" width="90" height="6" rx="3" fill="#3B8276"/>
+    <rect x="116" y="80" width="90" height="6" rx="3" fill="#3B8276"/>
+    <rect x="212" y="80" width="90" height="6" rx="3" fill="#E2E8F0"/>
+
+    <text x="20" y="114" fill="#0F172A" font-size="13" font-weight="700">专长活主动派，小问题自己答</text>
+    <text x="20" y="138" fill="#475569" font-size="12.5">遇到已启用、已授权且不同于主模型的专</text>
+    <text x="20" y="157" fill="#475569" font-size="12.5">长任务主动委派；问答、澄清直接搞定。</text>
+
+    <rect x="20" y="174" width="292" height="28" rx="7" fill="#ECF7F4"/>
+    <text x="32" y="192.5" fill="#1F5E54" font-size="11.5"><tspan font-weight="700">适合：</tspan>兼顾响应速度与多模型强项的主力用法</text>
+  </g>
+
+  <!-- Card 3: Orchestrator -->
+  <g transform="translate(752, 64)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="332" height="218" rx="14" fill="#FFFFFF" stroke="#7889B6" stroke-width="1.6"/>
+    <rect x="20" y="18" width="56" height="22" rx="6" fill="#EEF0FA"/>
+    <text x="48" y="33" text-anchor="middle" fill="#495A8A" font-size="11.5" font-weight="700">强分工</text>
+    <text x="312" y="33" text-anchor="end" fill="#58699B" font-size="11.5" font-family="'SFMono-Regular', Consolas, monospace">orchestrator</text>
+
+    <text x="20" y="68" fill="#0F172A" font-size="19" font-weight="800">编排者模式</text>
+    <!-- Intensity Bar: 3/3 -->
+    <rect x="20" y="80" width="90" height="6" rx="3" fill="#58699B"/>
+    <rect x="116" y="80" width="90" height="6" rx="3" fill="#58699B"/>
+    <rect x="212" y="80" width="90" height="6" rx="3" fill="#58699B"/>
+
+    <text x="20" y="114" fill="#0F172A" font-size="13" font-weight="700">主助手专职拆解、发单与验收</text>
+    <text x="20" y="138" fill="#475569" font-size="12.5">匹配的实质工作必须交给专长模型执行，</text>
+    <text x="20" y="157" fill="#475569" font-size="12.5">主助手专注方案统筹、极小改动与复核。</text>
+
+    <rect x="20" y="174" width="292" height="28" rx="7" fill="#F2F3FA"/>
+    <text x="32" y="192.5" fill="#3E4D7A" font-size="11.5"><tspan font-weight="700">适合：</tspan>大型项目、追求严格分工交付的场景</text>
+  </g>
+
+  <!-- Footer Note -->
+  <g transform="translate(36, 296)" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+    <rect x="0" y="0" width="1048" height="34" rx="9" fill="#FFFFFF" stroke="#E2E8F0"/>
+    <text x="524" y="21.5" text-anchor="middle" fill="#475569" font-size="12">说明：两种主动模式仅在主会话每轮首步追加紧凑提醒（同模型三元组自动合并），且始终优先服从用户“直接回答 / 直接执行”的明确指示。</text>
+  </g>
+</svg>

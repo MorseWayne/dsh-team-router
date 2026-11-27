@@ -28,9 +28,9 @@ import { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory';
 import * as router from '../src/index.ts';
 import { NativeTeams } from '../src/adapter/dsh/native-team.ts';
 import type { Config as EffectiveRouterConfig } from '../src/adapter/dsh/config.ts';
-import type { DelegationMode } from '../src/core/native-subagent.ts';
-import type { RouterConfig } from '../src/core/policy.ts';
-import type { RoutingPolicyV2, Target } from '../src/core/routing-policy.ts';
+import { createDefaultRoutingConfig } from '../src/core/routing-policy.ts';
+import type { CustomCategory, RoutingConfig, Target } from '../src/core/routing-policy.ts';
+import type { ActiveCategory } from '../src/core/active-registry.ts';
 import type { ExecutionRecord } from '../src/core/execution-store.ts';
 
 // Same released log-only event used by dsh-tool-subagent's user-controlled opt-in.
@@ -41,30 +41,20 @@ declare module '@deepseek-ai/dsh-session/types' {
   }
 }
 
-export const safePolicy = (): RoutingPolicyV2 => ({
-  version: 2, defaultTarget: { executor: 'native', model: { mode: 'inherit' } }, categories: {}, historyLimit: 100,
+export const safeRouting = createDefaultRoutingConfig;
+export const explicitTarget = (model: string, reasoningEffort?: string): Extract<Target, { mode: 'explicit' }> => ({
+  mode: 'explicit', provider: 'offline', model,
+  ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
 });
-export const explicitTarget = (model: string, reasoningEffort?: string): Target => ({
-  executor: 'native', model: { mode: 'explicit', provider: 'offline', id: model,
-    ...(reasoningEffort === undefined ? {} : { reasoningEffort }) },
+export const customCategory = (id = 'custom-evidence', overrides: Partial<CustomCategory> = {}): CustomCategory => ({
+  id, name: 'Evidence', purpose: 'Verify sources and uncertainties.', enabled: true, proactive: true,
+  binding: { mode: 'default' }, ...overrides,
 });
-type HarnessConfig = (RouterConfig | { policyV2: RoutingPolicyV2 }) & {
-  nativeSubagentGuidance?: boolean;
-  delegationMode?: DelegationMode;
-  enforceNativeSubagentRouting?: boolean;
-};
+type HarnessConfig = { routing?: RoutingConfig };
 
 export const text = (value: string): ContentBlock[] => [{ type: 'text', text: value }];
 export const route = (model: string, reasoningEffort?: string) => ({
   provider: 'offline', model, ...(reasoningEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(reasoningEffort) }),
-});
-export const config = (): RouterConfig => ({
-  routes: { fast: route('fast'), review: route('review', 'high'), strong: route('strong') },
-  rules: [
-    { id: 'cheap-list', keywords: ['list', 'inventory'], route: 'fast' },
-    { id: 'review-code', keywords: ['review', 'audit'], route: 'review', priority: 10 },
-  ],
-  roles: { reviewer: 'review' },
 });
 
 /** Only the LLM transport is synthetic: all sessions, Agents, Teams and hooks are native. */
@@ -141,9 +131,10 @@ export class OfflineAdapter extends LlmAdapter {
 
 export interface RouterStatus {
   teamId: string;
-  policy: RoutingPolicyV2;
-  migrationRequired: boolean;
-  externalExecutors: Record<'codex' | 'agy' | 'cursor', string>;
+  routing: RoutingConfig;
+  categories: Array<Pick<ActiveCategory, 'id' | 'origin' | 'group' | 'proactive'> & {
+    name: string; purpose: string; source: ActiveCategory['bindingSource']; target: Target;
+  }>;
   executions: Array<ExecutionRecord & { actualModel: ReturnType<typeof route> | null }>;
 }
 export interface Delegated {
@@ -180,7 +171,7 @@ export class NativeHarness {
     this.defaultEnabled = defaultEnabled;
   }
 
-  static async create(policy: HarnessConfig = { policyV2: safePolicy() }, defaultEnabled = true) {
+  static async create(policy: HarnessConfig = {}, defaultEnabled = true) {
     const harness = new NativeHarness(await mkdtemp(join(tmpdir(), 'dsh-team-router-native-')), policy, defaultEnabled);
     try { await harness.mount(); return harness; }
     catch (error) { await harness.close(); throw error; }
@@ -239,9 +230,7 @@ export class NativeHarness {
     const active = fiber.effectiveConfig as EffectiveRouterConfig;
     const candidate = fiber.resolveConfig({ ...policy, stateDir: active.stateDir }) as EffectiveRouterConfig;
     assert.equal(candidate.stateDir, active.stateDir, 'This helper only commits live policy fields');
-    for (const key of ['policyV2', 'routes', 'rules', 'roles', 'defaultRoute', 'historyLimit', 'nativeSubagentGuidance', 'delegationMode', 'enforceNativeSubagentRouting'] as const) {
-      updateVolatile(active[key], candidate[key]);
-    }
+    updateVolatile(active.routing, candidate.routing);
     assert.equal(fiber.effectiveConfig, active, 'Live updates retain the native effective config references');
   }
 

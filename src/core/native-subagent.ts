@@ -1,303 +1,176 @@
-import { CATEGORIES, CATEGORY_IDS } from './categories.ts';
-import type { CategoryId } from './categories.ts';
-import { resolveRoutingSnapshot } from './routing-policy.ts';
-import type { RoutingPolicyV2 } from './routing-policy.ts';
+import { resolveActiveRegistry } from './active-registry.ts';
+import type { ActiveCategory, ActiveRegistry } from './active-registry.ts';
+import type { RoutingConfig } from './routing-policy.ts';
+import { CATEGORY_METADATA_BOUNDARY, promptString } from './prompt-metadata.ts';
 
-export const DELEGATION_MODES = Object.freeze(['passive', 'specialist-first', 'orchestrator'] as const);
-export type DelegationMode = typeof DELEGATION_MODES[number];
-
-export function isDelegationMode(value: unknown): value is DelegationMode {
-  return DELEGATION_MODES.some(mode => mode === value);
-}
-
-type ProactiveMode = Exclude<DelegationMode, 'passive'>;
-
-export interface RoutePair {
-  readonly provider: string;
-  readonly model: string;
-}
-
-export interface ExplicitNativeRoute extends RoutePair {
-  readonly reasoningEffort?: string;
-}
-
+export interface RoutePair { readonly provider: string; readonly model: string }
+export interface ExplicitNativeRoute extends RoutePair { readonly reasoningEffort?: string }
 export interface SessionRouteContext {
-  /**
-   * Session authorization snapshot:
-   * - `undefined`: do not filter by session authorization (caller did not supply one).
-   * - `null`: session has no policy event; only the parent route is authorized.
-   * - `readonly RoutePair[]`: exact authorized provider/model pairs.
-   */
+  /** undefined: no filter; null: parent pair only; list: exact Session grants. */
   readonly authorizedRoutes?: readonly RoutePair[] | null;
-  readonly parentRoute?: {
-    readonly provider?: string;
-    readonly model?: string;
-    readonly reasoningEffort?: string | undefined;
-  };
-  /**
-   * Controls whether the prompt proactively encourages delegating matching
-   * specialist deliverables. Defaults to `'passive'`.
-   */
-  readonly delegationMode?: DelegationMode;
-  /**
-   * Only confirmed root (top-level) agents receive proactive delegation guidance;
-   * child subagents stay passive to prevent recursive delegation loops.
-   */
+  readonly parentRoute?: { readonly provider?: string; readonly model?: string; readonly reasoningEffort?: string | undefined };
   readonly isRoot?: boolean;
 }
-
-export interface ResolvedCategoryRoute {
-  readonly category: CategoryId;
-  readonly mode: 'explicit' | 'inherit' | 'unauthorized' | 'external';
-  readonly route?: ExplicitNativeRoute;
-}
-
-export interface NativeRoutingPlan {
+interface CategoryIdentity { readonly category: string; readonly entry: ActiveCategory }
+export type ResolvedCategoryRoute = CategoryIdentity & (
+  | { readonly mode: 'inherit'; readonly route?: never }
+  | { readonly mode: 'explicit' | 'unauthorized'; readonly route: ExplicitNativeRoute }
+);
+type AuthorizedCategoryRoute = CategoryIdentity & { readonly mode: 'explicit'; readonly route: ExplicitNativeRoute };
+export interface SessionRouteGroup { readonly route: ExplicitNativeRoute; readonly entries: readonly AuthorizedCategoryRoute[] }
+export interface SessionRoutingPlan {
   readonly entries: readonly ResolvedCategoryRoute[];
   readonly explicitRoutes: readonly ExplicitNativeRoute[];
+  readonly explicitGroups: readonly SessionRouteGroup[];
   readonly inheritAllowed: boolean;
 }
+export type SubagentValidationResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
-export type SubagentValidationResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly reason: string };
-
-/**
- * Only genuine specialist deliverables participate in proactive delegation.
- * `quick` and `unspecified` stay passive so small requests and general Q&A
- * are never unnecessarily offloaded to a subagent.
- */
-export const PROACTIVE_SPECIALIST_CATEGORIES: ReadonlySet<CategoryId> = new Set([
-  'visual-engineering', 'ultrabrain', 'deep', 'artistry', 'writing',
-]);
-
-function isRouteAuthorized(route: RoutePair, session?: SessionRouteContext): boolean {
-  if (session === undefined || session.authorizedRoutes === undefined) return true;
-  if (session.authorizedRoutes === null) {
-    return session.parentRoute?.provider === route.provider && session.parentRoute?.model === route.model;
-  }
-  return session.authorizedRoutes.some(entry => entry.provider === route.provider && entry.model === route.model);
+const routeKey = (route: SessionRouteContext['parentRoute']): string => JSON.stringify([route?.provider, route?.model, route?.reasoningEffort ?? null]);
+function isAuthorized(route: RoutePair, session?: SessionRouteContext): boolean {
+  const allowed = session?.authorizedRoutes;
+  if (allowed === undefined) return true;
+  if (allowed === null) return session?.parentRoute?.provider === route.provider && session.parentRoute.model === route.model;
+  return allowed.some(({ provider, model }) => provider === route.provider && model === route.model);
 }
-
-type ExplicitCategoryRoute = ResolvedCategoryRoute & { readonly route: ExplicitNativeRoute };
-
-function proactiveMode(session?: SessionRouteContext): ProactiveMode | undefined {
-  const mode = session?.delegationMode;
-  return session?.isRoot === true && (mode === 'specialist-first' || mode === 'orchestrator') ? mode : undefined;
-}
-
-function distinctSpecialistRoutes(plan: NativeRoutingPlan, parent: SessionRouteContext['parentRoute']): ExplicitCategoryRoute[] {
-  if (!parent?.provider || !parent.model) return [];
-  return plan.entries.filter((entry): entry is ExplicitCategoryRoute =>
-    entry.mode === 'explicit'
-    && entry.route !== undefined
-    && PROACTIVE_SPECIALIST_CATEGORIES.has(entry.category)
-    && (entry.route.provider !== parent.provider || entry.route.model !== parent.model
-      || entry.route.reasoningEffort !== parent.reasoningEffort));
-}
-
-function routeKey(route: ExplicitNativeRoute): string {
-  return JSON.stringify([route.provider, route.model, route.reasoningEffort ?? null]);
-}
-
-function formatExplicitRoute(route: ExplicitNativeRoute): string {
-  const base = `provider=${JSON.stringify(route.provider)}, model=${JSON.stringify(route.model)}`;
-  return route.reasoningEffort === undefined
-    ? `${base} (omit reasoning_effort)`
-    : `${base}, reasoning_effort=${JSON.stringify(route.reasoningEffort)}`;
-}
-
-/**
- * Resolve all seven categories against a V2 policy into an actionable native
- * `subagent` routing plan, taking optional Session authorization into account.
- */
-export function buildNativeRoutingPlan(policy: RoutingPolicyV2, session?: SessionRouteContext): NativeRoutingPlan {
+export function projectSessionPlan(registry: ActiveRegistry, session?: SessionRouteContext): SessionRoutingPlan {
   const entries: ResolvedCategoryRoute[] = [];
-  const seen = new Map<string, ExplicitNativeRoute>();
+  const groups = new Map<string, { route: ExplicitNativeRoute; entries: AuthorizedCategoryRoute[] }>();
   let inheritAllowed = false;
-
-  for (const id of CATEGORY_IDS) {
-    const target = resolveRoutingSnapshot(policy, id).target;
-    if (target.executor !== 'native') {
-      entries.push({ category: id, mode: 'external' });
+  for (const entry of registry.entries) {
+    const identity = { category: entry.id, entry };
+    const target = entry.effectiveTarget;
+    if (target.mode === 'inherit') {
+      entries.push({ ...identity, mode: 'inherit' });
       inheritAllowed = true;
       continue;
     }
-    if (target.model.mode === 'inherit') {
-      entries.push({ category: id, mode: 'inherit' });
+    const { provider, model, reasoningEffort } = target;
+    const route: ExplicitNativeRoute = { provider, model, ...(reasoningEffort === undefined ? {} : { reasoningEffort }) };
+    if (!isAuthorized(route, session)) {
+      entries.push({ ...identity, mode: 'unauthorized', route });
       inheritAllowed = true;
       continue;
     }
-    const route: ExplicitNativeRoute = {
-      provider: target.model.provider,
-      model: target.model.id,
-      ...(target.model.reasoningEffort === undefined ? {} : { reasoningEffort: target.model.reasoningEffort }),
-    };
-    if (!isRouteAuthorized(route, session)) {
-      entries.push({ category: id, mode: 'unauthorized', route });
-      inheritAllowed = true;
-      continue;
-    }
-    entries.push({ category: id, mode: 'explicit', route });
-    seen.set(routeKey(route), route);
+    const selected = { ...identity, mode: 'explicit' as const, route };
+    entries.push(selected);
+    const key = routeKey(route);
+    const group = groups.get(key);
+    if (group) group.entries.push(selected);
+    else groups.set(key, { route, entries: [selected] });
   }
-
-  return { entries, explicitRoutes: [...seen.values()], inheritAllowed };
+  const explicitGroups = [...groups.values()];
+  return { entries, explicitGroups, explicitRoutes: explicitGroups.map(({ route }) => route), inheritAllowed };
+}
+export function buildNativeRoutingPlan(config: RoutingConfig, session?: SessionRouteContext): SessionRoutingPlan {
+  return projectSessionPlan(resolveActiveRegistry(config), session);
 }
 
-function formatCategoryTable(plan: NativeRoutingPlan): string[] {
-  return plan.entries.map(entry => {
-    const purpose = CATEGORIES[entry.category].en.purpose;
-    if (entry.mode === 'explicit' && entry.route !== undefined) {
-      return `- ${entry.category} (${purpose}): ${formatExplicitRoute(entry.route)}`;
-    }
-    if (entry.mode === 'unauthorized') {
-      return `- ${entry.category} (${purpose}): inherit parent model (configured route is not authorized in this Session; omit provider, model, reasoning_effort)`;
-    }
-    return `- ${entry.category} (${purpose}): inherit parent model (omit provider, model, reasoning_effort)`;
-  });
+const BRIDGE = 'If namespaced or bridged, use the host `subagent` exposing `provider` and `model`, not an adapter-local subagent.';
+const OWNER = 'Choose one owner for a mixed task by its primary deliverable, not keywords; split only independently verifiable deliverables.';
+const FOLLOWUPS = 'Includes follow-ups and post-approval implementation. Honor explicit requests to answer or execute directly.';
+function tuple({ provider, model, reasoningEffort }: ExplicitNativeRoute): string {
+  return `(${promptString(provider)}, ${promptString(model)}${reasoningEffort === undefined ? '' : `, ${promptString(reasoningEffort)}`})`;
 }
-
-const BRIDGE_GUIDANCE = 'If namespaced or bridged, use the host `subagent` exposing `provider` and `model`, not an adapter-local subagent.';
-const FOLLOWUP_GUIDANCE = 'This also applies to multi-turn follow-ups and implementation after plan approval. Respect explicit requests to answer or execute directly.';
-
-function proactiveGuidance(mode: ProactiveMode, specialists: ExplicitCategoryRoute[], tool: string): string {
-  const categories = specialists.map(entry => entry.category).join(', ');
+function specialistGroups(plan: SessionRoutingPlan, session?: SessionRouteContext): SessionRouteGroup[] {
+  return plan.explicitGroups.filter(group => routeKey(group.route) !== routeKey(session?.parentRoute))
+    .map(({ route, entries }) => ({ route, entries: entries.filter(({ entry }) => entry.proactive) }))
+    .filter(({ entries }) => entries.length > 0);
+}
+function proactiveInstruction(mode: 'specialist-first' | 'orchestrator', tool: string): string {
   return mode === 'orchestrator'
-    ? `Orchestrator delegation is enabled: scope and assign substantive deliverables in these distinct specialist categories (${categories}). You must delegate execution via ${tool}, then verify and summarize. Handle only simple Q&A, clarification, plan alignment, and tiny single-point edits yourself. ${FOLLOWUP_GUIDANCE}`
-    : `Specialist-first delegation is enabled for this session: proactively delegate substantive work by primary deliverable in these distinct specialist categories (${categories}) via ${tool}, then verify and summarize. Handle simple Q&A, quick clarifications, and tiny edits directly. ${FOLLOWUP_GUIDANCE}`;
+    ? `Orchestrator: you must delegate matching substantive execution via ${tool}; scope the work and verify the result. Handle only simple questions, clarification and tiny edits directly. ${FOLLOWUPS}`
+    : `Specialist-first: proactively delegate matching substantive deliverables via ${tool}; verify and summarize. Handle simple questions and tiny edits directly. ${FOLLOWUPS}`;
+}
+function formatRoutes(plan: SessionRoutingPlan, showBuiltinPurpose: boolean, proactive?: ReadonlySet<string>): string[] {
+  const labels = (entries: readonly ResolvedCategoryRoute[]) => entries.map(({ entry }) => {
+    const purpose = showBuiltinPurpose && entry.origin === 'builtin' ? ` (${entry.shortPurposeEn})` : '';
+    return `${entry.id}${purpose}${proactive?.has(entry.id) ? '*' : ''}`;
+  }).join(', ');
+  const lines = plan.explicitGroups.map(({ route, entries }) => `${tuple(route)}: ${labels(entries)}`);
+  const inherit = plan.entries.filter(entry => entry.mode === 'inherit');
+  const unauthorized = plan.entries.filter(entry => entry.mode === 'unauthorized');
+  if (inherit.length || unauthorized.length) {
+    const parts = [inherit.length ? labels(inherit) : '', unauthorized.length ? `${labels(unauthorized)} (configured route unauthorized; inherit parent model)` : ''];
+    lines.push(`Inherit — omit provider/model/reasoning_effort: ${parts.filter(Boolean).join('; ')}`);
+  }
+  return lines;
+}
+function customMetadata({ entry }: ResolvedCategoryRoute): string {
+  const avoid = entry.avoidEn === undefined ? '' : `,"avoid":${promptString(entry.avoidEn)}`;
+  return `{"id":${promptString(entry.id)},"purpose":${promptString(entry.purposeEn)}${avoid}}`;
 }
 
-/** Compact, turn-local policy. The host decides when and how to attach it. */
-export function buildNativeSubagentReminder(policy: RoutingPolicyV2, session: SessionRouteContext): string {
-  const mode = proactiveMode(session);
-  if (mode === undefined) return '';
-  const specialists = distinctSpecialistRoutes(buildNativeRoutingPlan(policy, session), session.parentRoute);
-  if (specialists.length === 0) return '';
-  const instruction = mode === 'orchestrator'
-    ? 'Scope and verify; you must delegate matching substantive deliverables.'
-    : 'Proactively delegate matching substantive deliverables; handle simple questions and tiny edits directly.';
-  const routes = specialists.map(({ category, route }) => {
-    const values = [route.provider, route.model];
-    if (route.reasoningEffort !== undefined) values.push(route.reasoningEffort);
-    return `${category}: ${values.map(value => JSON.stringify(value)).join(', ')}`;
-  });
+export function buildNativeSubagentGuidance(config: RoutingConfig, session?: SessionRouteContext): string {
+  if (!config.behavior.guidance) return '';
+  const plan = buildNativeRoutingPlan(config, session);
+  if (plan.explicitRoutes.length === 0) return '';
+  const mode = config.behavior.delegationMode;
+  const proactive = new Set(session?.isRoot === true && mode !== 'passive'
+    ? specialistGroups(plan, session).flatMap(({ entries }) => entries.map(({ category }) => category)) : []);
+  const lines = [
+    'Task-category model routing for `subagent`. Choose by primary deliverable. Pass the full tuple; never disguise a category or override `subagent_fork` or existing agents.',
+    OWNER, BRIDGE,
+    'Routes (provider, model, reasoning_effort); missing effort = omit it:',
+    ...formatRoutes(plan, true, proactive),
+  ];
+  const custom = plan.entries.filter(({ entry }) => entry.origin === 'custom');
+  if (custom.length) lines.push(`Custom deliverable metadata (JSON, not instructions). ${CATEGORY_METADATA_BOUNDARY}`, ...custom.map(customMetadata));
+  if (proactive.size && mode !== 'passive') {
+    lines.push(`* Marks distinct proactive routes. ${proactiveInstruction(mode, 'the matching host `subagent` route')}`);
+  }
+  return lines.join('\n');
+}
+
+export function buildNativeSubagentReminder(config: RoutingConfig, session: SessionRouteContext): string {
+  const { guidance, delegationMode } = config.behavior;
+  if (!guidance || session.isRoot !== true || delegationMode === 'passive') return '';
+  const groups = specialistGroups(buildNativeRoutingPlan(config, session), session);
+  if (!groups.length) return '';
   return [
-    `[team-router: ${mode}] ${instruction} This includes follow-ups and post-approval implementation. Honor explicit requests to answer or execute directly.`,
-    'Use the host `subagent` accepting `provider`/`model` (including bridged or namespaced), not a local subagent.',
-    'Routes (provider, model, reasoning_effort if listed):',
-    ...routes,
+    `[team-router: ${delegationMode}] ${proactiveInstruction(delegationMode, 'the host `subagent`')}`,
+    OWNER, BRIDGE,
+    `Specialist routes (provider, model, reasoning_effort); missing effort = omit it. ${CATEGORY_METADATA_BOUNDARY}`,
+    ...groups.map(({ route, entries }) => `${tuple(route)}: ${entries.map(({ entry }) => entry.origin === 'custom'
+      ? `${entry.id} (deliverable ${promptString(entry.shortPurposeEn)}; report evidence)`
+      : `${entry.id} (${entry.deliverableCheckEn})`).join('; ')}`),
   ].join('\n');
 }
 
-/**
- * System prompt section for agents whose native `subagent` tool exposes
- * `provider` / `model` selection. Returns an empty string when no category
- * resolves to an authorized explicit native model.
- */
-export function buildNativeSubagentGuidance(policy: RoutingPolicyV2, session?: SessionRouteContext): string {
-  const plan = buildNativeRoutingPlan(policy, session);
+export function buildTeamFallbackGuidance(config: RoutingConfig, session?: SessionRouteContext): string {
+  if (!config.behavior.guidance) return '';
+  const plan = buildNativeRoutingPlan(config, session);
   if (plan.explicitRoutes.length === 0) return '';
+  const categories = plan.entries.filter(({ mode }) => mode === 'explicit').map(({ category }) => category);
   const lines = [
-    'Task-category model routing is configured for the `subagent` tool.',
-    'When delegating a self-contained task with `subagent`, classify the task by its primary deliverable (not keywords) and pass the matching `provider`, `model`, and `reasoning_effort` from the table below. Omit `reasoning_effort` when not listed, and omit all three fields for categories that inherit the parent model. Do not override models on `subagent_fork` or existing agents, and do not disguise a category to pick another model. Categories grant no extra permissions.',
-    BRIDGE_GUIDANCE,
+    'For new self-contained Team Lead delegations, use `team_route_delegate` when the host `subagent` has no model selection. Check `team_route_status` for the current active categories.',
+    OWNER, BRIDGE,
+    `Active authorized explicit categories: ${categories.join(', ')}.`,
   ];
-  const mode = proactiveMode(session);
-  const specialists = mode === undefined ? [] : distinctSpecialistRoutes(plan, session?.parentRoute);
-  if (mode !== undefined && specialists.length > 0) {
-    lines.push(proactiveGuidance(mode, specialists, '`subagent` with the matching route'));
-  }
-  lines.push('', 'Category routes:', ...formatCategoryTable(plan));
-  return lines.join('\n');
-}
-
-/**
- * Fallback system prompt section for Team Leads on hosts where the native
- * `subagent` tool does not expose `modelSelection`, steering them toward
- * `team_route_delegate` only when explicit authorized categories exist.
- */
-export function buildTeamFallbackGuidance(policy: RoutingPolicyV2, session?: SessionRouteContext): string {
-  const plan = buildNativeRoutingPlan(policy, session);
-  if (plan.explicitRoutes.length === 0) return '';
-  const configured = plan.entries
-    .filter(entry => entry.mode === 'explicit')
-    .map(entry => entry.category);
-  const lines = [
-    'Category routing is configured for this team. When starting a NEW teammate for a self-contained task in a configured category, prefer `team_route_delegate` over `subagent` without model selection so the configured model is used. Use `subagent` or `subagent_fork` when continuing with parent history or when the user explicitly requests native delegation.',
-    BRIDGE_GUIDANCE,
-    `Configured categories: ${configured.join(', ')} (other categories inherit the Lead model).`,
-  ];
-  const mode = proactiveMode(session);
-  const specialists = mode === undefined ? [] : distinctSpecialistRoutes(plan, session?.parentRoute);
-  if (mode !== undefined && specialists.length > 0) {
-    lines.push(proactiveGuidance(mode, specialists, 'a selectable host `subagent`, or `team_route_delegate` if unavailable'));
+  const mode = config.behavior.delegationMode;
+  if (session?.isRoot === true && mode !== 'passive' && specialistGroups(plan, session).length) {
+    lines.push(proactiveInstruction(mode, 'a selectable host `subagent`, or `team_route_delegate` if unavailable'));
   }
   return lines.join('\n');
 }
 
-/**
- * Strict pre-execute check for native `subagent` calls.
- * - Never blocks when no explicit authorized routes exist.
- * - Lets native `subagent` validate non-object or malformed/partial arguments.
- * - Denies omitted model arguments only when EVERY category resolves to an
- *   explicit authorized route (so `inherit` is not a configured outcome).
- * - Denies explicit model arguments whose `(provider, model, reasoning_effort)`
- *   tuple does not match any configured, authorized category route.
- */
-export function validateNativeSubagentCall(
-  policy: RoutingPolicyV2,
-  args: unknown,
-  session?: SessionRouteContext,
-): SubagentValidationResult {
-  const plan = buildNativeRoutingPlan(policy, session);
-  if (plan.explicitRoutes.length === 0) return { ok: true };
-  if (typeof args !== 'object' || args === null || Array.isArray(args)) return { ok: true };
-
-  const record = args as Record<string, unknown>;
-  const provider = record.provider;
-  const model = record.model;
-  const effort = record.reasoning_effort;
-
-  // No explicit route supplied.
-  if (provider === undefined && model === undefined && effort === undefined) {
+export function validateNativeSubagentCall(config: RoutingConfig, args: unknown, session?: SessionRouteContext): SubagentValidationResult {
+  if (!config.behavior.strict) return { ok: true };
+  const plan = buildNativeRoutingPlan(config, session);
+  if (!plan.entries.length || typeof args !== 'object' || args === null || Array.isArray(args)) return { ok: true };
+  const descriptors = ['provider', 'model', 'reasoning_effort'].map(key => Object.getOwnPropertyDescriptor(args, key));
+  if (descriptors.some(descriptor => descriptor && !Object.hasOwn(descriptor, 'value'))) return { ok: true };
+  const [provider, model, effort] = descriptors.map(descriptor => descriptor?.value as unknown);
+  const omitted = provider === undefined && model === undefined && effort === undefined;
+  if (omitted) {
     if (plan.inheritAllowed) return { ok: true };
-    return {
-      ok: false,
-      reason: [
-        'Strict task-category routing is enabled: every category maps to an explicit configured model, so `subagent` calls must specify `provider` and `model` (and `reasoning_effort` when configured). Classify the task by its primary deliverable and retry with one of:',
-        ...formatCategoryTable(plan),
-      ].join('\n'),
-    };
+  } else {
+    if (typeof provider !== 'string' || typeof model !== 'string' || (effort !== undefined && typeof effort !== 'string')) return { ok: true };
+    const key = routeKey({ provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) });
+    if (plan.explicitRoutes.some(route => routeKey(route) === key)) return { ok: true };
   }
-
-  // Let native `subagent` reject malformed or partial model fields with its own errors.
-  if (typeof provider !== 'string' || typeof model !== 'string' || (effort !== undefined && typeof effort !== 'string')) {
-    return { ok: true };
-  }
-  const normalizedEffort = effort === undefined ? undefined : effort;
-  const requestedKey = routeKey({
-    provider,
-    model,
-    ...(normalizedEffort === undefined ? {} : { reasoningEffort: normalizedEffort }),
-  });
-
-  if (plan.explicitRoutes.some(route => routeKey(route) === requestedKey)) {
-    return { ok: true };
-  }
-
-  const label = normalizedEffort === undefined
-    ? `${provider}/${model}`
-    : `${provider}/${model} (reasoning_effort=${normalizedEffort})`;
-  const suffix = plan.inheritAllowed
-    ? 'Or omit `provider`, `model`, and `reasoning_effort` for categories that inherit the parent model.'
-    : 'Every category has an explicit route; do not omit `provider` and `model`.';
-  return {
-    ok: false,
-    reason: [
-      `Model route "${label}" does not match any configured category route in team-router. Re-classify the task by its primary deliverable and retry \`subagent\` with one of:`,
-      ...formatCategoryTable(plan),
-      suffix,
-    ].join('\n'),
-  };
+  const reason = omitted
+    ? 'Strict task-category routing: every active category has an explicit route; specify an authorized configured tuple.'
+    : 'Strict task-category routing: requested tuple does not match any active authorized category route.';
+  return { ok: false, reason: [reason, 'Routes (provider, model, reasoning_effort); missing effort = omit it:', ...formatRoutes(plan, false)].join('\n') };
 }

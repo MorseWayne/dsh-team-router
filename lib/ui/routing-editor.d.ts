@@ -1,23 +1,9 @@
-import type { ModelAuthorizationForm } from './model-grants.ts';
-import type { CategoryId } from '../core/categories.ts';
-import type { MigrationPreview } from '../core/migration.ts';
-import type { DelegationMode } from '../core/native-subagent.ts';
-import type { CategoryBinding, RoutingPolicyV2, Target } from '../core/routing-policy.ts';
-import type { RouterConfig } from '../core/policy.ts';
+import type { BuiltinId } from '../core/categories.ts';
 import type { ModelCatalog, RecommendationPreview } from '../core/recommendations.ts';
-export interface RoutingBehaviorSettings {
-    delegationMode: DelegationMode;
-    enforceNativeSubagentRouting: boolean;
-}
+import type { Binding, RoutingBehavior, RoutingConfig, Target } from '../core/routing-policy.ts';
+import type { ModelAuthorizationForm } from './model-grants.ts';
 export interface RoutingFormValue {
-    policyV2?: RoutingPolicyV2 | null;
-    routes?: RouterConfig['routes'];
-    rules?: RouterConfig['rules'];
-    roles?: RouterConfig['roles'];
-    defaultRoute?: string | null;
-    historyLimit?: number;
-    delegationMode?: DelegationMode;
-    enforceNativeSubagentRouting?: boolean;
+    routing?: RoutingConfig | null;
 }
 export interface RoutingFormSnapshot {
     status: 'loading' | 'ready' | 'unavailable';
@@ -27,30 +13,38 @@ export interface RoutingFormSnapshot {
 }
 export type RoutingMutation = {
     op: 'set';
-    path: ['policyV2'];
-    value: RoutingPolicyV2;
-} | {
-    op: 'set';
-    path: ['delegationMode'];
-    value: DelegationMode;
-} | {
-    op: 'set';
-    path: ['enforceNativeSubagentRouting'];
-    value: boolean;
+    path: ['routing'];
+    value: RoutingConfig;
 };
 export interface RoutingForm {
     getSnapshot(): RoutingFormSnapshot;
     subscribe(listener: () => void): () => void;
     mutate(ops: readonly RoutingMutation[], expectedRevision?: number): Promise<boolean>;
 }
+export interface BuiltinDraftEntry {
+    enabled: boolean;
+    binding: Binding;
+}
+export interface CustomCategoryDraft {
+    id: string;
+    persisted: boolean;
+    name: string;
+    purpose: string;
+    avoid: string;
+    enabled: boolean;
+    proactive: boolean;
+    binding: Binding;
+}
 export interface RoutingDraft {
     defaultTarget: Target;
-    categories: Record<CategoryId, CategoryBinding>;
+    behavior: RoutingBehavior;
+    builtins: Record<BuiltinId, BuiltinDraftEntry>;
+    custom: CustomCategoryDraft[];
     historyLimit: string;
 }
-export type RoutingSection = CategoryId | 'default';
-export type RoutingField = 'executor' | 'provider' | 'model' | 'effort' | 'historyLimit';
-export type RoutingIssueReason = 'required' | 'history' | 'catalog' | 'catalogRequired' | 'externalUnavailable' | 'structure';
+export type RoutingSection = 'default' | BuiltinId | string;
+export type RoutingField = 'provider' | 'model' | 'effort' | 'historyLimit' | 'id' | 'name' | 'purpose' | 'avoid';
+export type RoutingIssueReason = 'required' | 'history' | 'catalog' | 'catalogRequired' | 'structure' | 'customId' | 'customDuplicate' | 'customLimit' | 'text';
 export interface RoutingValidationIssue {
     section: RoutingSection;
     field: RoutingField;
@@ -58,43 +52,41 @@ export interface RoutingValidationIssue {
     detail?: string;
 }
 export type RoutingEditorError = {
-    kind: 'validation' | 'refused' | 'transport' | 'migration' | 'previewChanged' | 'grantUnavailable' | 'grantReadOnly' | 'grantFailed';
+    kind: 'validation' | 'refused' | 'transport' | 'previewChanged' | 'grantUnavailable' | 'grantReadOnly' | 'grantFailed';
     detail: string;
 };
 export interface RoutingEditorSnapshot {
     draft: RoutingDraft | undefined;
-    behavior: RoutingBehaviorSettings;
     revision: number | undefined;
     dirty: boolean;
     saving: boolean;
     stale: boolean;
-    migrationRequired: boolean;
-    migrationConfirmed: boolean;
-    retired: MigrationPreview['retired'] | undefined;
     issue: RoutingValidationIssue | undefined;
     error: RoutingEditorError | undefined;
     notice: 'saved' | undefined;
 }
-export declare function readBehaviorSettings(value: RoutingFormValue | undefined): RoutingBehaviorSettings;
-export declare function routingPolicyToDraft(input: unknown): RoutingDraft;
-export declare function routingDraftToPolicy(draft: RoutingDraft): RoutingPolicyV2;
-/** Select legacy fields explicitly; stateDir and future Host fields are not policy inputs. */
-export declare function routingFormPreview(value: RoutingFormValue): {
-    policy: RoutingPolicyV2;
-    required: boolean;
-    retired: MigrationPreview['retired'] | undefined;
-};
-/** No unset operation exists: clearing V2 would revive legacy composition fields. */
-export declare function routingPolicyMutations(input: unknown): RoutingMutation[];
+export type BuiltinPreset = 'all12' | 'classic7';
+export interface CustomCategorySeed {
+    id?: string;
+    name?: string;
+    purpose?: string;
+    avoid?: string;
+    proactive?: boolean;
+}
+export declare function routingFormConfig(value: RoutingFormValue): RoutingConfig;
+export declare function routingConfigToDraft(input: unknown, persistedCustomIds?: ReadonlySet<string>): RoutingDraft;
+export declare function routingDraftToConfig(draft: RoutingDraft): RoutingConfig;
+export declare function routingConfigMutations(input: unknown): RoutingMutation[];
 export declare function routingDraftIssue(draft: RoutingDraft, catalog?: ModelCatalog, catalogReady?: boolean): RoutingValidationIssue | undefined;
-/** Staged, revision-bound V2 editor. Migration, preview application, and save are explicit actions. */
+/** Staged, revision-bound V3 editor. Preset toggles, custom categories, previews, and saves are explicit actions. */
 export declare class RoutingEditor {
     private state;
     private listeners;
-    private readonly customTargets;
-    private readonly nativeModels;
-    private policyDirty;
-    private savedBehavior;
+    private readonly customBindings;
+    private readonly explicitTargets;
+    private savedConfig;
+    private savedFingerprint;
+    private persistedCustomIds;
     private readonly stop;
     private disposed;
     private readonly form;
@@ -105,18 +97,24 @@ export declare class RoutingEditor {
     dispose(): void;
     private publish;
     private remember;
+    private computeDirty;
     private accept;
     edit(draft: RoutingDraft, revision?: number | undefined): void;
-    editBehavior(patch: Partial<RoutingBehaviorSettings>, revision?: number | undefined): void;
-    /** Preserve dormant custom choices within this edit session, but never persist them in default bindings. */
-    setCategoryMode(category: CategoryId, mode: 'default' | 'target', revision?: number | undefined): void;
-    /** Returning from inheritance restores the last explicit native choice until save/reload. */
+    editBehavior(patch: Partial<RoutingBehavior>, revision?: number | undefined): void;
+    setBuiltinEnabled(id: BuiltinId, enabled: boolean, revision?: number | undefined): void;
+    /** Bulk-toggle builtin enabled switches only; preserves bindings, custom categories, and requires explicit Save. */
+    applyBuiltinPreset(preset: BuiltinPreset, revision?: number | undefined): void;
+    setSectionBinding(section: RoutingSection, binding: Binding, revision?: number | undefined): void;
+    setCategoryMode(section: Exclude<RoutingSection, 'default'>, mode: 'default' | 'target', revision?: number | undefined): void;
     setNativeModelMode(section: RoutingSection, mode: 'inherit' | 'explicit', revision?: number | undefined, choice?: {
         provider: string;
-        id: string;
+        model: string;
     }): void;
+    setSectionEffort(section: RoutingSection, provider: string, model: string, effort: string, revision?: number | undefined): void;
+    addCustomCategory(seed?: CustomCategorySeed, revision?: number | undefined): string | undefined;
+    updateCustomCategory(id: string, patch: Partial<Pick<CustomCategoryDraft, 'id' | 'name' | 'purpose' | 'avoid' | 'enabled' | 'proactive' | 'binding'>>, revision?: number | undefined): void;
+    removeCustomCategory(id: string, revision?: number | undefined): void;
     discard(): void;
-    confirmMigration(revision?: number | undefined): boolean;
     applyRecommendations(preview: RecommendationPreview, revision?: number | undefined): boolean;
     save(options?: {
         catalog?: ModelCatalog;

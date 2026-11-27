@@ -1,6 +1,6 @@
-import type { CategoryBinding, Target } from '../core/routing-policy.ts';
+import type { RoutingConfig } from '../core/routing-policy.ts';
 export declare const MODEL_AUTHORIZATION_ENTRY = "subagent-model-selection-settings";
-type Route = {
+export type Route = {
     provider: string;
     model: string;
 };
@@ -25,14 +25,11 @@ export interface ModelAuthorizationForm {
         value: Route[];
     })[], revision: number): Promise<boolean>;
 }
-/** Only active, explicit native routes participate; neither effort nor unused editor choices grant access. */
-export declare function requiredModelRoutes(policy: {
-    defaultTarget: Target;
-    categories: Partial<Record<string, CategoryBinding>>;
-}): Route[];
+/** Only active, explicit native routes participate; disabled categories and unused defaults never require grants. */
+export declare function requiredModelRoutes(config: RoutingConfig | unknown): Route[];
 export type GrantProblem = 'loading' | 'unserved' | 'invalid' | 'readOnly';
 export declare function isAllowedModelArray(value: unknown): value is Route[];
-type GrantPlan = {
+export type GrantPlan = {
     kind: 'complete' | 'readOnly';
 } | {
     kind: 'unavailable';
@@ -43,4 +40,3 @@ type GrantPlan = {
     routes: Route[];
 };
 export declare function planModelGrant(required: Route[], snapshot: ReturnType<ModelAuthorizationForm['getSnapshot']>): GrantPlan;
-export {};

@@ -17,17 +17,17 @@ import type {} from '@deepseek-ai/dsh-settings';
 import type {} from '@deepseek-ai/dsh-system-prompt';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { NativeTeams } from './native-team.ts';
-import { Config, installConfigValidation, readRoutingState, requireRoutingPolicy } from './config.ts';
-import { CATEGORY_IDS, categorySelectionGuidance } from '../../core/categories.ts';
-import { DIAGNOSTICS, EXTERNAL_GATES, buildCategoryPrompt, outcomeState, validateDelegateArgs } from '../../core/delegation.ts';
+import { Config, installConfigValidation, readRoutingConfig } from './config.ts';
+import { resolveActiveCategory, resolveActiveRegistry } from '../../core/active-registry.ts';
+import type { ActiveCategory, ActiveRegistry } from '../../core/active-registry.ts';
+import { DIAGNOSTICS, buildCategoryPrompt, outcomeState, validateDelegateArgs } from '../../core/delegation.ts';
 import type { DelegateArgs } from '../../core/delegation.ts';
 import { buildNativeSubagentGuidance, buildNativeSubagentReminder, buildTeamFallbackGuidance, validateNativeSubagentCall } from '../../core/native-subagent.ts';
-import { resolveRoutingSnapshot } from '../../core/routing-policy.ts';
+import type { SessionRouteContext } from '../../core/native-subagent.ts';
 import { authorizationProjection, assertAuthorizedRoute } from './authorization.ts';
 import type { AuthorizedRoute } from './authorization.ts';
 import { ExecutionStore, policyDigest } from '../../core/execution-store.ts';
 export { Config } from './config.ts';
-export { EXTERNAL_GATES } from '../../core/delegation.ts';
 
 export const name = 'team-router';
 export const inject = ['agents', 'agentTeams', 'subagents', 'tools', 'llm', 'sessionProjections'];
@@ -48,6 +48,23 @@ function toolSupportsModelSelection(definition: Pick<ToolSchema, 'parameters'> |
   const properties = definition?.parameters?.properties;
   if (typeof properties !== 'object' || properties === null) return false;
   return Object.hasOwn(properties, 'provider') && Object.hasOwn(properties, 'model');
+}
+
+function requireActiveCategory(registry: ActiveRegistry, id: unknown): ActiveCategory {
+  const category = resolveActiveCategory(registry, id);
+  if (category) return category;
+  const activeIds = registry.entries.map(entry => entry.id);
+  throw new Error(activeIds.length === 0
+    ? 'No active routing categories. Enable at least one category in Team Router settings first.'
+    : `Requested category is inactive or unknown. Active category IDs: ${activeIds.join(', ')}. Check team_route_status for current routing.`);
+}
+
+const modelTuple = ({ provider, model, reasoningEffort }: AgentOptions) => [provider, model, reasoningEffort];
+function parentModelDigest(agent: Agent, options: AgentOptions): string {
+  const current = agent.model?.current();
+  // Native delegation uses the last request tuple, but a live selection can also
+  // change during preflight before the parent has dispatched another request.
+  return policyDigest([modelTuple(options), current === undefined ? null : modelTuple(current)]);
 }
 
 interface ActiveExecution { teamId: string; id: string; activation: SubagentActivation; historyLimit: number }
@@ -100,35 +117,40 @@ export class TeamRouter {
 
   private async delegate(agent: Agent, args: DelegateArgs, signal: AbortSignal) {
     const membership = this.caller(agent, true);
+    const registry = resolveActiveRegistry(readRoutingConfig(this.configuration));
+    const category = requireActiveCategory(registry, args?.category);
     validateDelegateArgs(args);
-    const policy = requireRoutingPolicy(this.configuration);
-    const digest = policyDigest(policy);
-    const snapshot = resolveRoutingSnapshot(policy, args.category);
-    if (snapshot.target.executor !== 'native') throw new Error(EXTERNAL_GATES[snapshot.target.executor]);
+    const { config, configDigest } = registry;
+    const target = category.effectiveTarget;
     const provider = this.ctx.subagents.getProvider('spawn');
     if (!provider?.prepareContinuable || !provider.capabilities.agentOptions || !provider.capabilities.depthLimit) {
       throw new Error('The native spawn provider with model selection and depth enforcement is required');
     }
     const parentOptions = parentAgentOptionsForDelegation(agent);
-    const parentDigest = policyDigest(parentOptions);
-    const model = snapshot.target.model;
-    const options: AgentOptions = model.mode === 'inherit' ? { ...parentOptions } : {
-      provider: model.provider, model: model.id,
-      reasoningEffort: model.reasoningEffort === undefined ? undefined : ReasoningEffortId(model.reasoningEffort),
+    const parentDigest = parentModelDigest(agent, parentOptions);
+    const options: AgentOptions = target.mode === 'inherit' ? { ...parentOptions } : {
+      provider: target.provider, model: target.model,
+      reasoningEffort: target.reasoningEffort === undefined ? undefined : ReasoningEffortId(target.reasoningEffort),
     };
-    if (model.mode === 'explicit') assertAuthorizedRoute(this.authorization.stateOf(agent.session), parentOptions, { provider: model.provider, model: model.id });
+    if (target.mode === 'explicit') assertAuthorizedRoute(this.authorization.stateOf(agent.session), parentOptions, target);
     await this.preflight(options, signal);
     signal.throwIfAborted();
     if (this.caller(agent, true).root !== membership.root) throw new Error('Team identity changed during routing preparation');
-    if (policyDigest(requireRoutingPolicy(this.configuration)) !== digest || policyDigest(parentAgentOptionsForDelegation(agent)) !== parentDigest) {
+    const currentRegistry = resolveActiveRegistry(readRoutingConfig(this.configuration));
+    requireActiveCategory(currentRegistry, category.id);
+    const currentParent = parentAgentOptionsForDelegation(agent);
+    if (currentRegistry.configDigest !== configDigest || parentModelDigest(agent, currentParent) !== parentDigest) {
       throw new Error('Routing configuration or inherited model changed before submission; inspect settings and delegate again');
     }
     if (this.ctx.subagents.getProvider('spawn') !== provider) throw new Error('Native spawn provider changed during preparation');
     // Recheck authorization after metadata I/O, then submit without another await.
-    if (model.mode === 'explicit') assertAuthorizedRoute(this.authorization.stateOf(agent.session), parentOptions, { provider: model.provider, model: model.id });
+    if (target.mode === 'explicit') assertAuthorizedRoute(this.authorization.stateOf(agent.session), currentParent, target);
     const maxDepth = this.ctx.subagents.resolveMaxDepth(undefined);
     const teamId = String(membership.id);
-    const record = this.store.begin(teamId, { category: snapshot.category, source: snapshot.source, target: snapshot.target, policyDigest: digest }, policy.historyLimit);
+    const record = this.store.begin(teamId, {
+      categoryId: category.id, categoryNameAtStart: category.nameEn, categoryOrigin: category.origin,
+      source: category.bindingSource, target, policyDigest: configDigest,
+    }, config.historyLimit);
     let activation: SubagentActivation;
     try {
       activation = await this.ctx.subagents.startActivation({
@@ -137,37 +159,37 @@ export class TeamRouter {
         ...(args.cwd === undefined ? {} : { cwd: args.cwd }),
         ...(maxDepth === undefined ? {} : { maxDepth }),
         agentOptions: options,
-        prompt: [{ type: 'text', text: buildCategoryPrompt(snapshot.category, args.prompt) }],
+        prompt: [{ type: 'text', text: buildCategoryPrompt(category, args.prompt) }],
         signal, delivery: 'parent',
       });
     } catch (error) {
       // rc.3 can reject after inbox admission if activation publication fails;
       // even cleanup failure is only logged by the manager. Never claim no effects.
-      try { this.store.update(teamId, record.id, { state: 'unknown', diagnostic: DIAGNOSTICS.uncertainStartup }, policy.historyLimit); }
+      try { this.store.update(teamId, record.id, { state: 'unknown', diagnostic: DIAGNOSTICS.uncertainStartup }, config.historyLimit); }
       catch { this.ctx.logger.warn(`Could not persist uncertain startup for ${record.id}`); }
       throw error;
     }
-    const running = { teamId, id: record.id, activation, historyLimit: policy.historyLimit };
+    const running = { teamId, id: record.id, activation, historyLimit: config.historyLimit };
     this.active.set(record.id, running);
     void activation.result.then(result => {
       this.store.update(teamId, record.id, {
         state: outcomeState(result.stopReason),
         stopReason: result.stopReason,
-      }, policy.historyLimit);
+      }, config.historyLimit);
     }, () => {
-      this.store.update(teamId, record.id, { state: 'unknown', diagnostic: DIAGNOSTICS.unknownOutcome }, policy.historyLimit);
+      this.store.update(teamId, record.id, { state: 'unknown', diagnostic: DIAGNOSTICS.unknownOutcome }, config.historyLimit);
     }).catch(() => {
       this.ctx.logger.warn(`Could not persist routing outcome for ${record.id}; inspect the native child outcome`);
     }).finally(() => { this.active.delete(record.id); });
     // Observe completion before any fallible post-start persistence or teardown.
     try {
-      this.store.update(teamId, record.id, { state: 'running', childId: String(activation.childId), name: activation.name }, policy.historyLimit);
+      this.store.update(teamId, record.id, { state: 'running', childId: String(activation.childId), name: activation.name }, config.historyLimit);
     } catch (error) {
       try { await activation.dispose(); }
       catch { throw new Error(`Audit write failed for ${record.id} (${activation.name}); child cleanup is unconfirmed. Inspect the native child and partial effects before retrying.`, { cause: error }); }
       throw new Error(`Audit write failed for ${record.id} (${activation.name}); managed teardown finished. Inspect partial effects before retrying.`, { cause: error });
     }
-    return { kind: 'activation' as const, name: activation.name, executionId: record.id, category: snapshot.category, target: snapshot.target };
+    return { kind: 'activation' as const, name: activation.name, executionId: record.id, category: category.id, target };
   }
 
   private install(agent: Agent): void {
@@ -182,16 +204,19 @@ export class TeamRouter {
       this.caller(candidate, leadOnly); return candidate;
     };
     disposers.push(agent.ctx.tools.register(defineTool({
-      name: 'team_route_status', description: 'Read configured task categories, migration status, requested targets and managed execution history. Actual models are only reported from native request headers; this does not start tasks.',
+      name: 'team_route_status', description: 'Read current routing settings, active task categories and managed execution history. Actual models are reported only from native request headers; this tool does not start tasks.',
       parameters: {}, output,
       execute: async (_args, exec) => {
         const current = caller(exec.agent);
         const membership = this.caller(current);
-        const state = readRoutingState(this.configuration);
+        const registry = resolveActiveRegistry(readRoutingConfig(this.configuration));
         // Normalize optional audit fields to the tool's JSON-only wire contract.
         return JSON.parse(JSON.stringify({
-          teamId: String(membership.id), policy: { ...state.policy }, migrationRequired: state.migrationRequired,
-          externalExecutors: EXTERNAL_GATES,
+          teamId: String(membership.id), routing: registry.config,
+          categories: registry.entries.map(entry => ({
+            id: entry.id, origin: entry.origin, group: entry.group, name: entry.nameEn, purpose: entry.purposeEn,
+            proactive: entry.proactive, source: entry.bindingSource, target: entry.effectiveTarget,
+          })),
           executions: this.store.list(String(membership.id)).map(record => {
             const active = this.active.get(record.id);
             const child = active ? this.ctx.agents.get(active.activation.childId) : undefined;
@@ -207,9 +232,9 @@ export class TeamRouter {
     if (membership.role !== 'lead') return;
     disposers.push(agent.ctx.tools.register(defineTool({
       name: 'team_route_delegate',
-      description: `Delegate a self-contained task using one configured category. Only new routed delegations use category settings; ordinary subagent calls do not. The native child starts with the chosen model on its first request and returns a managed completion notice. External executors that have not passed safety gates are refused.\n${categorySelectionGuidance('en')}`,
+      description: 'Delegate a self-contained task using one currently active category. Choose by the main deliverable. For mixed work, use one owner unless the deliverables are independently verifiable. Check team_route_status for live settings; ordinary subagent calls or existing teammates are not changed by this tool.',
       parameters: {
-        category: { type: 'string', enum: [...CATEGORY_IDS], required: true, description: 'Choose by main deliverable, then execution style; unspecified is the last fallback.' },
+        category: { type: 'string', required: true, description: 'Active category ID. Read team_route_status for the current active category list.' },
         prompt: { type: 'string', required: true, description: 'Self-contained goal, scope, constraints and acceptance criteria. The child does not inherit conversation history.' },
         description: { type: 'string', required: true, description: 'Short task label, at most 200 characters.' },
         name: { type: 'string', description: 'Optional native child name; lowercase words joined by hyphens, not lead.' },
@@ -233,11 +258,6 @@ export class TeamRouter {
         return { executionId: running.id, stopped: true, sideEffectsRolledBack: false };
       },
     })));
-    for (const toolName of ['team_route_set', 'team_route_reset']) disposers.push(agent.ctx.tools.register(defineTool({
-      name: toolName, description: 'Retired legacy member-model override. Use category settings and team_route_delegate for new work; this tool always refuses and never changes an existing teammate.',
-      parameters: { member: { type: 'string' }, route: { type: 'string' } }, output,
-      execute: (_args, exec) => { caller(exec.agent, true); throw new Error('Legacy member overrides have been retired. Configure task categories and start a new routed delegation.'); },
-    })));
   }
   private release(agent: Agent): void {
     for (const dispose of this.registrations.get(agent) ?? []) dispose();
@@ -250,29 +270,25 @@ export class TeamRouter {
   }
   private guidanceState(agent: Agent) {
     try {
-      const state = readRoutingState(this.configuration);
-      if (!state.migrationRequired) {
-        return { policy: state.policy, authorizedRoutes: this.authorization.stateOf(agent.session) };
-      }
-    } catch { /* Invalid policy or unavailable authorization; don't advertise routes. */ }
+      const config = readRoutingConfig(this.configuration);
+      if (config.behavior.guidance) return { config, authorizedRoutes: this.authorization.stateOf(agent.session) };
+    } catch { /* Invalid configuration or unavailable authorization; don't advertise routes. */ }
     return undefined;
   }
   private renderPromptGuidance(agent: Agent | undefined, modelSelection: Readonly<ModelSelection> | undefined): string {
-    if (this.stopped || !this.configuration.nativeSubagentGuidance.get()) return '';
-    if (agent === undefined || this.ctx.agents.get(agent.id) !== agent) return '';
+    if (this.stopped || agent === undefined || this.ctx.agents.get(agent.id) !== agent) return '';
     const state = this.guidanceState(agent);
     if (state === undefined) return '';
-    const session = {
+    const session: SessionRouteContext = {
       authorizedRoutes: state.authorizedRoutes,
       parentRoute: modelSelection ?? agent.model?.current() ?? parentAgentOptionsForDelegation(agent),
-      delegationMode: this.configuration.delegationMode.get(),
       isRoot: this.isLiveRoot(agent),
     };
     if (toolSupportsModelSelection(this.ctx.tools.get(NATIVE_SUBAGENT_TOOL, agent))) {
-      return buildNativeSubagentGuidance(state.policy, session);
+      return buildNativeSubagentGuidance(state.config, session);
     }
     if (session.isRoot && this.teams.tryMembership(agent)?.role === 'lead') {
-      return buildTeamFallbackGuidance(state.policy, session);
+      return buildTeamFallbackGuidance(state.config, session);
     }
     return '';
   }
@@ -297,16 +313,14 @@ export class TeamRouter {
       if (step !== 1 || !messages.some(message => message.source.kind === 'user')) return next();
       const decision = await next();
       if (decision.kind !== 'enter' || signal.aborted || this.stopped
-        || !this.configuration.nativeSubagentGuidance.get() || !this.isLiveRoot(agent)
-        || !decision.messages.some(message => message.source.kind === 'user')) return decision;
-      const delegationMode = this.configuration.delegationMode.get();
-      if (delegationMode !== 'specialist-first' && delegationMode !== 'orchestrator') return decision;
+        || !this.isLiveRoot(agent) || !decision.messages.some(message => message.source.kind === 'user')) return decision;
       const state = this.guidanceState(agent);
-      if (state === undefined) return decision;
+      if (state === undefined || state.config.behavior.delegationMode === 'passive') return decision;
       // Do not gate on the unnamespaced tool's presence: a provider bridge
       // can expose the model-selecting host tool under its own namespace.
-      const text = buildNativeSubagentReminder(state.policy, {
-        authorizedRoutes: state.authorizedRoutes, parentRoute: modelSelection, delegationMode, isRoot: true,
+      const text = buildNativeSubagentReminder(state.config, {
+        authorizedRoutes: state.authorizedRoutes,
+        parentRoute: modelSelection ?? parentAgentOptionsForDelegation(agent), isRoot: true,
       });
       if (text === '') return decision;
       const reminder = createUserMessage({
@@ -315,19 +329,19 @@ export class TeamRouter {
       return { ...decision, messages: [...decision.messages, reminder] };
     });
     this.ctx.on('tools/pre-execute', (exec, next) => {
-      if (this.stopped || exec.name !== NATIVE_SUBAGENT_TOOL || !this.configuration.enforceNativeSubagentRouting.get()) return next();
+      if (this.stopped || exec.name !== NATIVE_SUBAGENT_TOOL) return next();
       const agent = exec.agent;
       if (agent === undefined || this.ctx.agents.get(agent.id) !== agent) return next();
       if (!toolSupportsModelSelection(this.ctx.tools.get(NATIVE_SUBAGENT_TOOL, agent, exec.toolSet))) return next();
-      let state: ReturnType<typeof readRoutingState>;
-      try { state = readRoutingState(this.configuration); }
+      let config: ReturnType<typeof readRoutingConfig>;
+      try { config = readRoutingConfig(this.configuration); }
       catch { return next(); }
-      if (state.migrationRequired) return next();
+      if (!config.behavior.strict) return next();
       let authorizedRoutes: AuthorizedRoute[] | null;
       try { authorizedRoutes = this.authorization.stateOf(agent.session); }
-      catch { return next(); }
+      catch { authorizedRoutes = []; }
       const parentRoute = parentAgentOptionsForDelegation(agent);
-      const verdict = validateNativeSubagentCall(state.policy, exec.arguments, { authorizedRoutes, parentRoute });
+      const verdict = validateNativeSubagentCall(config, exec.arguments, { authorizedRoutes, parentRoute });
       if (!verdict.ok) return Promise.resolve({ kind: 'deny', reason: verdict.reason });
       return next();
     });
@@ -353,9 +367,9 @@ export class TeamRouter {
 }
 
 export async function apply(ctx: Context, config: Config): Promise<void> {
-  readRoutingState(config);
+  readRoutingConfig(config);
   const router = new TeamRouter(ctx, config);
-  installConfigValidation(ctx, legacy => { router.store.backupLegacy(legacy); });
+  installConfigValidation(ctx);
   ctx.inject(['settings'], child => {
     child.effect(() => child.settings.configure({ auto: false }, ctx.fiber), 'teamRouter.settingsPresentation');
   });

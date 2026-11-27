@@ -1,17 +1,11 @@
 import { z } from 'zod';
-import type { Target } from './routing-policy.ts';
-import type { CategoryId } from './categories.ts';
-import type { NormalizedConfig } from './policy.ts';
 declare const recordSchema: z.ZodObject<{
     id: z.ZodString;
-    category: z.ZodEnum<{
-        "visual-engineering": "visual-engineering";
-        ultrabrain: "ultrabrain";
-        deep: "deep";
-        artistry: "artistry";
-        quick: "quick";
-        unspecified: "unspecified";
-        writing: "writing";
+    categoryId: z.ZodString;
+    categoryNameAtStart: z.ZodString;
+    categoryOrigin: z.ZodEnum<{
+        custom: "custom";
+        builtin: "builtin";
     }>;
     source: z.ZodEnum<{
         default: "default";
@@ -19,30 +13,12 @@ declare const recordSchema: z.ZodObject<{
     }>;
     policyDigest: z.ZodString;
     target: z.ZodPipe<z.ZodUnknown, z.ZodTransform<{
-        executor: "native";
-        model: {
-            mode: "inherit";
-        };
+        mode: "inherit";
     } | {
-        executor: "native";
-        model: {
-            mode: "explicit";
-            provider: string;
-            id: string;
-            reasoningEffort?: string;
-        };
-    } | {
-        executor: import("./routing-policy.ts").ExternalExecutor;
-        model: {
-            mode: "executor-default";
-        };
-    } | {
-        executor: import("./routing-policy.ts").ExternalExecutor;
-        model: {
-            mode: "explicit";
-            id: string;
-            reasoningEffort?: string;
-        };
+        mode: "explicit";
+        provider: string;
+        model: string;
+        reasoningEffort?: string;
     }, unknown>>;
     ownerProcess: z.ZodOptional<z.ZodString>;
     state: z.ZodEnum<{
@@ -64,23 +40,17 @@ declare const recordSchema: z.ZodObject<{
 export type ExecutionRecord = z.infer<typeof recordSchema>;
 export type ExecutionState = ExecutionRecord['state'];
 export declare const policyDigest: (policy: unknown) => string;
-/** Separate v2 files: old member baselines/overrides/history are never reinterpreted. */
+/** Separate execution files; older state formats are not reinterpreted. */
 export declare class ExecutionStore {
     readonly directory: string;
     private readonly owned;
     constructor(directory: string);
     private path;
     private atomic;
-    backupLegacy(legacy: NormalizedConfig): string;
     private records;
     list(teamId: string): ExecutionRecord[];
     private commit;
-    begin(teamId: string, input: {
-        category: CategoryId;
-        source: 'category' | 'default';
-        target: Target;
-        policyDigest: string;
-    }, limit: number): ExecutionRecord;
+    begin(teamId: string, input: Pick<ExecutionRecord, 'categoryId' | 'categoryNameAtStart' | 'categoryOrigin' | 'source' | 'target' | 'policyDigest'>, limit: number): ExecutionRecord;
     update(teamId: string, id: string, patch: Partial<Pick<ExecutionRecord, 'state' | 'childId' | 'name' | 'stopReason' | 'diagnostic'>>, limit: number): void;
 }
 export {};

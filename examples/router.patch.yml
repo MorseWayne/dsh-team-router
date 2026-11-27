@@ -1,30 +1,29 @@
-# V2 shape reference. Prefer the native settings editor / ConfigEditor to save.
-# A nonempty legacy configuration requires explicit migration confirmation first.
-# Replace YOUR_* with exact IDs from the Host catalog and authorize them for the
-# Session before delegating; saving a model does not grant model access.
+# dsh-team-router 1.0.0 routing V3 example. Prefer the Team task routing settings.
+# Replace YOUR_* with exact IDs from the Host catalog. Saving this config does
+# not grant model access: authorize the pair for the Session before delegating.
 - id: team-router
   config:
-    policyV2:
-      version: 2
-      defaultTarget:
-        executor: native
-        model: { mode: inherit }
-      categories:
-        visual-engineering: { mode: default }
-        ultrabrain: { mode: default }
+    routing:
+      version: 3
+      defaultTarget: { mode: inherit }
+      behavior:
+        guidance: true
+        delegationMode: passive  # passive | specialist-first | orchestrator
+        strict: false
+      builtins:
         deep:
-          mode: target
-          target:
-            executor: native
-            model:
-              mode: explicit
-              provider: YOUR_PROVIDER_ID
-              id: YOUR_MODEL_ID
-              # reasoningEffort: high # Only when advertised by this exact model.
-        artistry: { mode: default }
-        quick: { mode: default }
-        unspecified: { mode: default }
-        writing: { mode: default }
+          binding:
+            mode: explicit
+            provider: YOUR_PROVIDER_ID
+            model: YOUR_MODEL_ID
+            # reasoningEffort: high  # Only when advertised by this exact model.
+        artistry: { enabled: false }
+      custom:
+        - id: custom-evidence-check
+          name: Evidence verification
+          purpose: Verify a specific-version API or docs and cite sources and uncertainties.
+          avoid: Use writing when the task is to organize a manual.
+          enabled: true
+          proactive: false
+          binding: { mode: default }
       historyLimit: 100
-# Codex, agy and Cursor targets are structurally represented in V2 but currently
-# refused at execution until their managed integration passes its safety gates.

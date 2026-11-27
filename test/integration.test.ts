@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { NativeHarness, config, explicitTarget, route, safePolicy } from './helpers.ts';
-import type { RoutingPolicyV2 } from '../src/core/routing-policy.ts';
+import { NativeHarness, customCategory, explicitTarget, route, safeRouting } from './helpers.ts';
+import type { RoutingConfig } from '../src/core/routing-policy.ts';
+import { BUILTIN_IDS } from '../src/core/categories.ts';
 import { LLM_FAILURE_CODES, LlmError } from '@deepseek-ai/dsh-llm';
 import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
 import { ExecutionStore } from '../src/core/execution-store.ts';
 
 // Real Cordis services, AgentLoop, Session events, Teams and native subagents;
 // only LLM transport is offline. Never executes an external CLI or network call.
-describe('V2 category routing through native DSH', { concurrency: false, timeout: 30_000 }, () => {
-  const quickPolicy = (): RoutingPolicyV2 => ({ ...safePolicy(), categories: {
-    quick: { mode: 'target', target: explicitTarget('fast') },
-    writing: { mode: 'target', target: explicitTarget('review', 'high') },
+describe('V3 category routing through native DSH', { concurrency: false, timeout: 30_000 }, () => {
+  const quickPolicy = (): RoutingConfig => ({ ...safeRouting(), builtins: {
+    quick: { binding: explicitTarget('fast') },
+    writing: { binding: explicitTarget('review', 'high') },
   } });
 
   it('starts safely with inherited model and records its real first request', async (t) => {
@@ -23,7 +24,10 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
     assert.equal(h.requests(child)[0]!.model, 'strong');
     assert.equal(h.requests(child)[0]!.provider, 'offline');
     const status = await h.status(lead);
-    assert.equal(status.migrationRequired, false);
+    assert.deepEqual(Object.keys(status).sort(), ['categories', 'executions', 'routing', 'teamId']);
+    assert.deepEqual(status.routing, safeRouting());
+    assert.deepEqual(status.categories.map(({ id }) => id), BUILTIN_IDS);
+    assert.equal(status.executions[0]!.categoryId, 'unspecified');
     assert.equal(status.executions[0]!.source, 'default');
     assert.equal(status.executions[0]!.actualModel?.model, 'strong');
     assert.equal(h.teams.tryMembership(child)?.root, lead);
@@ -32,7 +36,7 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
   });
 
   it('uses the authorized category on the first adapter request, never task keywords or name', async (t) => {
-    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const h = await NativeHarness.create({ routing: quickPolicy() }); t.after(() => h.close());
     const lead = await h.lead(); h.authorize(lead);
     const quick = await h.delegate(lead, 'quick', 'reviewer', 'Review and audit complicated architecture.');
     const worker = await h.child(lead, quick.executionId); await h.idle(worker, 1);
@@ -48,7 +52,7 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
   // The rc.3 provider used MALFORMED_RESPONSE; rc.4 introduced a dedicated refusal code.
   const refusalCode = Object.hasOwn(LLM_FAILURE_CODES, 'CONTENT_REFUSED') ? 'CONTENT_REFUSED' : 'MALFORMED_RESPONSE';
   it(`audits ${refusalCode} as a failed native delegation without trying another model`, async (t) => {
-    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const h = await NativeHarness.create({ routing: quickPolicy() }); t.after(() => h.close());
     const lead = await h.lead(); h.authorize(lead);
     const gate = h.adapter.holdNextRequest(); t.after(() => gate.release());
     const run = await h.delegate(lead, 'quick');
@@ -69,7 +73,7 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
   });
 
   it('rejects explicit selection without Session opt-in before creating any child', async (t) => {
-    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const h = await NativeHarness.create({ routing: quickPolicy() }); t.after(() => h.close());
     const lead = await h.lead(); const before = h.created.length;
     await assert.rejects(h.delegate(lead, 'quick'), /not authorized/i);
     assert.equal(h.created.length, before);
@@ -78,7 +82,7 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
   });
 
   it('does not reuse another Team Session authorization', async (t) => {
-    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+    const h = await NativeHarness.create({ routing: quickPolicy() }); t.after(() => h.close());
     const authorized = await h.lead('allowed'); h.authorize(authorized);
     const other = await h.lead('denied');
     await assert.rejects(h.delegate(other, 'quick'), /not authorized/i);
@@ -99,7 +103,7 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
 
   for (const provider of ['spawn', 'fork'] as const) {
     it(`does not rewrite ordinary ${provider}, Lead, names or keyword-looking prompts`, async (t) => {
-      const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
+      const h = await NativeHarness.create({ routing: quickPolicy() }); t.after(() => h.close());
       const lead = await h.lead(); h.authorize(lead);
       await h.drive(lead, 'Please list, review and audit everything.', 1);
       const child = await h.teammate(lead, 'reviewer', 'Please LIST, REVIEW and AUDIT.', provider);
@@ -112,13 +116,13 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
 
   it('snapshots new delegations while existing child continuation keeps its creation model', async (t) => {
     const policy = quickPolicy();
-    const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
+    const h = await NativeHarness.create({ routing: policy }); t.after(() => h.close());
     const lead = await h.lead(); h.authorize(lead);
     const first = await h.delegate(lead, 'quick', 'first');
     const child = await h.child(lead, first.executionId); await h.idle(child, 1);
     const original = (await h.status(lead)).executions[0]!;
-    const next = quickPolicy(); next.categories.quick = { mode: 'target', target: explicitTarget('review', 'high') };
-    h.updatePolicy({ policyV2: next });
+    const next = quickPolicy(); next.builtins.quick = { binding: explicitTarget('review', 'high') };
+    h.updatePolicy({ routing: next });
     await h.drive(child, 'Continue the same child after settings changed.', 2);
     assert.equal(h.requests(child)[1]!.model, 'fast');
     const second = await h.delegate(lead, 'quick', 'second');
@@ -130,8 +134,8 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
   });
 
   it('clears inherited effort for an explicit same-model target that omits effort', async (t) => {
-    const policy = safePolicy(); policy.defaultTarget = explicitTarget('strong');
-    const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
+    const policy = safeRouting(); policy.defaultTarget = explicitTarget('strong');
+    const h = await NativeHarness.create({ routing: policy }); t.after(() => h.close());
     const lead = await h.lead('high-effort-lead', 'high');
     await h.drive(lead, 'Confirm the parent high effort request.', 1);
     assert.equal(h.requests(lead)[0]!.reasoningEffort, 'high');
@@ -190,7 +194,7 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
   });
 
   it('does not expose routing while Team mode is disabled', async (t) => {
-    const h = await NativeHarness.create({ policyV2: safePolicy() }, false); t.after(() => h.close());
+    const h = await NativeHarness.create({ routing: safeRouting() }, false); t.after(() => h.close());
     const lead = await h.lead();
     for (const name of ['team_route_delegate', 'team_route_status', 'team_route_cancel']) assert.equal(h.ctx.tools.get(name, lead), undefined);
     const child = await h.teammate(lead, 'worker', 'Review files.'); await child.whenIdle();
@@ -207,74 +211,87 @@ describe('V2 category routing through native DSH', { concurrency: false, timeout
     assert.deepEqual((await h.status(lead)).executions, []);
   });
 
-  it('keeps legacy configs migration-required without applying old rules or roles', async (t) => {
-    const h = await NativeHarness.create(config()); t.after(() => h.close());
-    const lead = await h.lead();
-    assert.equal((await h.status(lead)).migrationRequired, true);
-    await assert.rejects(h.delegate(lead), /migration-required/);
-    const worker = await h.teammate(lead, 'reviewer', 'Please list inventory and audit.'); await h.idle(worker, 1);
-    assert.equal(h.requests(worker)[0]!.model, 'strong');
-    assert.deepEqual((await h.status(lead)).executions, []);
+  it('uses dynamic custom IDs and preserves the execution snapshot after category removal', async (t) => {
+    const routing = safeRouting(); routing.builtins.writing = { enabled: false };
+    routing.custom.push(customCategory('custom-check', { binding: explicitTarget('review', 'high') }));
+    const h = await NativeHarness.create({ routing }); t.after(() => h.close());
+    const lead = await h.lead(); h.authorize(lead);
+    const tool = h.ctx.tools.get('team_route_delegate', lead)!;
+    assert.equal(tool.parameters.properties.category.enum, undefined);
+    assert.doesNotMatch(tool.description, /custom-check|visual-engineering/);
+    await assert.rejects(h.delegate(lead, 'writing'), /Active category IDs:.*custom-check/);
+    const result = await h.delegate(lead, 'custom-check');
+    const child = await h.child(lead, result.executionId); await h.idle(child, 1);
+    assert.equal(h.requests(child)[0]!.model, 'review');
+    assert.match(JSON.stringify(h.requests(child)[0]!), /Task category: custom-check/);
+    h.updatePolicy({ routing: safeRouting() });
+    const status = await h.status(lead);
+    assert.ok(!status.categories.some(row => row.id === 'custom-check'));
+    const record = status.executions.find(row => row.id === result.executionId)!;
+    assert.deepEqual([record.categoryId, record.categoryNameAtStart, record.categoryOrigin], ['custom-check', 'Evidence', 'custom']);
+    await assert.rejects(h.delegate(lead, 'custom-check'), /inactive or unknown/);
   });
 
-  for (const name of ['team_route_set', 'team_route_reset']) {
-    it(`keeps ${name} retired without mutating a child`, async (t) => {
-      const h = await NativeHarness.create(); t.after(() => h.close());
-      const lead = await h.lead(); const child = await h.teammate(lead, 'worker', 'Ordinary work.'); await h.idle(child, 1);
-      await assert.rejects(h.tool(lead, name, { member: 'worker', route: 'fast' }), /retired/i);
-      assert.deepEqual(child.model.current(), route('strong'));
-      assert.deepEqual((await h.status(lead)).executions, []);
-    });
-  }
-
-  for (const executor of ['codex', 'agy', 'cursor'] as const) {
-    it(`fails closed for ${executor} without admission, fallback or external execution`, async (t) => {
-      const policy = safePolicy(); policy.defaultTarget = { executor, model: { mode: 'executor-default' } };
-      const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
-      const lead = await h.lead();
-      await assert.rejects(h.delegate(lead), /not enabled/i);
-      assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
-      assert.deepEqual((await h.status(lead)).executions, []);
-    });
-  }
+  it('does not register removed legacy tools and explains an empty active registry', async (t) => {
+    const routing = safeRouting();
+    for (const id of BUILTIN_IDS) routing.builtins[id] = { enabled: false };
+    const h = await NativeHarness.create({ routing }); t.after(() => h.close());
+    const lead = await h.lead();
+    for (const name of ['team_route_set', 'team_route_reset']) assert.equal(h.ctx.tools.get(name, lead), undefined);
+    await assert.rejects(h.delegate(lead, 'writing'), /Enable at least one category/);
+    assert.deepEqual((await h.status(lead)).categories, []);
+    assert.equal(h.created.length, 1);
+  });
 
   for (const target of [
-    { executor: 'native' as const, model: { mode: 'explicit' as const, provider: 'missing-provider', id: 'fast' } },
+    { mode: 'explicit' as const, provider: 'missing-provider', model: 'fast' },
     explicitTarget('missing-model'),
     explicitTarget('fast', 'unsupported-effort'),
   ]) {
     it(`rejects invalid advertised route ${JSON.stringify(target)} before child creation`, async (t) => {
-      const policy = safePolicy(); policy.defaultTarget = target;
-      const h = await NativeHarness.create({ policyV2: policy }); t.after(() => h.close());
+      const policy = safeRouting(); policy.defaultTarget = target;
+      const h = await NativeHarness.create({ routing: policy }); t.after(() => h.close());
       const lead = await h.lead();
-      assert.equal(target.model.mode, 'explicit');
-      const model = target.model as { provider: string; id: string };
-      lead.session.append('subagent/model-selection-policy', { allowedModels: [{ provider: model.provider, model: model.id }] });
+      lead.session.append('subagent/model-selection-policy', { allowedModels: [{ provider: target.provider, model: target.model }] });
       await assert.rejects(h.delegate(lead));
       assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
       assert.deepEqual((await h.status(lead)).executions, []);
     });
   }
 
-  it('refuses a policy changed during async model preflight instead of submitting a stale snapshot', async (t) => {
-    const h = await NativeHarness.create({ policyV2: quickPolicy() }); t.after(() => h.close());
-    const lead = await h.lead(); h.authorize(lead);
-    const started = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
-    t.after(() => release.resolve());
-    const listModels = h.adapter.listModels.bind(h.adapter);
-    let once = true;
-    h.adapter.listModels = async provider => {
-      if (once) { once = false; started.resolve(); await release.promise; }
-      return listModels(provider);
-    };
-    h.ctx.emit('llm/models-updated', 'offline');
-    const rejected = assert.rejects(h.delegate(lead, 'quick'), /changed before submission/i);
-    await started.promise;
-    try { h.updatePolicy({ policyV2: safePolicy() }); } finally { release.resolve(); }
-    await rejected;
-    assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
-    assert.deepEqual((await h.status(lead)).executions, []);
-  });
+  for (const change of ['config', 'disable', 'parent', 'authorization'] as const) {
+    it(`rechecks ${change} after async model preflight with no stale admission`, async (t) => {
+      const routing = quickPolicy();
+      if (change === 'authorization') routing.builtins.quick = { binding: explicitTarget('strong') };
+      const h = await NativeHarness.create({ routing }); t.after(() => h.close());
+      const lead = await h.lead(); if (change !== 'authorization') h.authorize(lead);
+      const started = Promise.withResolvers<void>(); const release = Promise.withResolvers<void>();
+      t.after(() => release.resolve());
+      const listModels = h.adapter.listModels.bind(h.adapter);
+      let once = true;
+      h.adapter.listModels = async provider => {
+        if (once) { once = false; started.resolve(); await release.promise; }
+        return listModels(provider);
+      };
+      h.ctx.emit('llm/models-updated', 'offline');
+      const explanation = change === 'disable' ? /Active category IDs/
+        : change === 'authorization' ? /not authorized/i : /changed before submission/i;
+      const rejected = assert.rejects(h.delegate(lead, 'quick'), explanation);
+      await started.promise;
+      try {
+        if (change === 'authorization') h.authorize(lead, ['fast']);
+        else if (change === 'parent') lead.model.select(route('strong', 'low'));
+        else {
+          const next = safeRouting();
+          if (change === 'disable') next.builtins.quick = { enabled: false };
+          h.updatePolicy({ routing: next });
+        }
+      } finally { release.resolve(); }
+      await rejected;
+      assert.equal(h.created.length, 1); assert.equal(h.adapter.requests.length, 0);
+      assert.deepEqual((await h.status(lead)).executions, []);
+    });
+  }
 
   it('still disposes a real native child when cancellation audit writes fail', async (t) => {
     const h = await NativeHarness.create(); t.after(() => h.close());

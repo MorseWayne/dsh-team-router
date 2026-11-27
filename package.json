@@ -1,7 +1,7 @@
 {
   "name": "dsh-team-router",
-  "version": "0.6.0",
-  "description": "Seven task-category presets and authorized creation-time model routing for native DeepSeek Harness Agent Teams.",
+  "version": "1.0.0",
+  "description": "Configurable task categories and authorized model routing for native DeepSeek Harness delegation.",
   "type": "module",
   "repository": {
     "type": "git",
@@ -15,7 +15,7 @@
   "types": "lib/index.d.ts",
   "exports": {
     ".": { "types": "./lib/index.d.ts", "default": "./lib/index.js" },
-    "./policy": { "types": "./lib/core/policy.d.ts", "default": "./lib/core/policy.js" },
+    "./active-registry": { "types": "./lib/core/active-registry.d.ts", "default": "./lib/core/active-registry.js" },
     "./routing-policy": { "types": "./lib/core/routing-policy.d.ts", "default": "./lib/core/routing-policy.js" },
     "./categories": { "types": "./lib/core/categories.d.ts", "default": "./lib/core/categories.js" },
     "./client": "./lib/client.js",

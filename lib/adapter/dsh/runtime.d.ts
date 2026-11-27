@@ -4,7 +4,6 @@ import { NativeTeams } from './native-team.ts';
 import { Config } from './config.ts';
 import { ExecutionStore } from '../../core/execution-store.ts';
 export { Config } from './config.ts';
-export { EXTERNAL_GATES } from '../../core/delegation.ts';
 export declare const name = "team-router";
 export declare const inject: string[];
 declare const REMINDER_SOURCE = "team-router:reminder";

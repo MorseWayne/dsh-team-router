@@ -1,69 +1,38 @@
-# 七分类路由实施进度
+# 1.0.0 实现与验证状态
 
-日期：2026-11-19。目标版本：**0.3.0**，适配 DSH **0.2.2-rc.3**。这是阶段性交付记录；完整外部 A2A 接入尚未完成，不能标记总目标完成。
+- 更新日期：2026-11-27
+- 目标版本：**1.0.0**（增强版路径 B，破坏性升级，不兼容旧版 V1/V2 配置）
+- 声明兼容宿主：DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**（Node.js 24+）
 
-## 已实现
+## 已落地改造范围
 
-- 七分类注册表、双语用途和边界、交付物优先的 Lead 指引。
-- 严格 V2 策略结构、不可变的执行快照、默认原生继承；旧类别不做隐式别名。
-- 设置页七卡片、实时模型／effort 选择、推荐差异预览、CAS 与失败草稿保留。
-- 单字段 `policyV2` 原子保存；旧非空配置要求明确迁移，保存前创建旧有效策略备份。组合层不注入 V2 默认对象，避免掩盖旧用户配置。
-- Lead 专用类别委派，在创建时传递模型，首请求即使用选定模型。普通 spawn/fork 与现有成员不被重写。
-- 按真实 Session 授权事件检查模型白名单，无授权记录时只允许父模型；目录可见不代表授权。
-- 原生元数据预检、配置变化／provider 变化复查、原生深度／容量／生命周期、取消与完成通知。
-- V2 独立审计、原子写、4 MiB 上限、终态数量裁剪、热重载迟到回调合并、冷重启孤儿转 unknown。
-- 旧成员覆盖工具只保留拒绝入口；关键词和角色映射不再参与运行。
+- **清理历史包袱**：已移除旧 V1 策略与迁移模块（`policy.ts`、`migration.ts`、`store.ts`、`editor.ts` 及旧专属测试）、已退役的 `team_route_set`/`team_route_reset` 工具、以及设置页中的迁移横幅与外部执行器占位。
+- **核心层（`src/core/`）**：
+  - [categories.ts](<../src/core/categories.ts>)：12 个内置类别、4 个工作分组、精简 7 类集合、4 张本地自定义场景模板卡及 slug 生成器。
+  - [routing-policy.ts](<../src/core/routing-policy.ts>)：单一原子 V3 `RoutingConfig` 严格解析、单行与控制字符过滤、规范化与稳定指纹。
+  - [active-registry.ts](<../src/core/active-registry.ts>)：浏览器安全的单一活跃类别解析器与活跃授权并集 `requiredGrantPairs`。
+  - [native-subagent.ts](<../src/core/native-subagent.ts>)：按完整三元组合并的系统提示与首步近场提醒、自定义元数据 JSON 安全隔离、严格校验四行真值表。
+  - [recommendations.ts](<../src/core/recommendations.ts>)：12 内置类精确目录候选、全量/按组预览、跳过停用类与自定义类。
+  - [delegation.ts](<../src/core/delegation.ts>) & [execution-store.ts](<../src/core/execution-store.ts>)：带一行交付证据要求的委派提示、与当前注册表解耦的 `executions/<team-hash>.json`（`format: 1`）历史存储。
+- **宿主适配层（`src/adapter/dsh/`）**：
+  - [config.ts](<../src/adapter/dsh/config.ts>) & [runtime.ts](<../src/adapter/dsh/runtime.ts>)：单字段 `routing` 配置校验、动态 `team_route_delegate` 活跃类别校验与预检后复核、`team_route_status` 实时活跃类别视图。
+- **设置页 UI（`src/ui/`）**：
+  - [client.tsx](<../src/ui/client.tsx>)、[CategoryGroup.tsx](<../src/ui/CategoryGroup.tsx>)、[CustomCategoryEditor.tsx](<../src/ui/CustomCategoryEditor.tsx>)、[RouteRow.tsx](<../src/ui/RouteRow.tsx>)、[routing-editor.ts](<../src/ui/routing-editor.ts>)、[model-grants.ts](<../src/ui/model-grants.ts>)：4 分组默认折叠、全部 12 / 精简 7 快捷开关、逐类停用与休眠绑定提示、自定义类别 CRUD 与 4 张模板卡、按活跃并集自动同步授权。
 
-主要实现：
-[分类](<../src/core/categories.ts>)、[V2 策略](<../src/core/routing-policy.ts>)、[原生运行](<../src/adapter/dsh/runtime.ts>)、[授权](<../src/adapter/dsh/authorization.ts>)、[状态](<../src/core/execution-store.ts>)、[设置页](<../src/ui/client.tsx>)。
-
-## 已验证
+## 已通过验证
 
 ```text
 npm run check
-  TypeScript: PASS
-  tests: 177 PASS / 0 FAIL / 0 SKIP
-  build: PASS
+  TypeScript (tsc --noEmit): PASS
+  tests: 105 PASS / 0 FAIL / 0 SKIP（含 3 项源码分层校验）
+  build (tsc + esbuild client): PASS
+
+test-host-compat.mjs（同一份 1.0.0 tarball，离线仅替代 LLM 传输）
+  DSH 0.2.2-rc.3: 102 PASS / 0 FAIL
+  DSH 0.2.2-rc.4: 102 PASS / 0 FAIL
+  DSH 0.2.2-rc.5: 102 PASS / 0 FAIL
 
 git diff --check: PASS
 ```
 
-其中 **31 项原生集成测试**使用真实 Cordis、AgentLoop、Session、Teams、spawn/fork 与托管生命周期，仅 LLM 传输离线替代。
-
-额外故障回归证明：
-
-- 同模型显式选择省略 effort，不继承父模型的 high。
-- 元数据检查期间修改策略，旧请求不得提交。
-- 审计磁盘写失败不阻止用户取消。
-- 启动返回失败可能发生在原生接纳之后，记录为 unknown，不能说“未启动／没有副作用”。
-- 插件卸载／重挂载后，旧任务结果仍通过原生通知到达，不覆盖新执行记录。
-- 原生 ConfigEditor 对 V2 保存、备份、CAS 冲突、组合层旧配置及重启恢复有效。
-
-覆盖文件：[集成测试](<../test/integration.test.ts>)、[配置持久化](<../test/settings.test.ts>)、[运行核心](<../test/routing-runtime.test.ts>)。
-
-## 外部 P0：证据与未关闭门禁
-
-> 2026-11-26 更新：外部执行器已移出本项目范围（见 [ARCHITECTURE.md](<ARCHITECTURE.md#范围之外外部执行器>)）。下表保留为调研记录，供独立执行器插件参考；下文「后续验收」第 3、4 项不再由本插件承担。
-
-本机发现的命令不在当前 PATH，但存在于用户本地 bin 目录。已受控执行三家的 `--help`，没有启动推理、登录、修改账号或安装外部运行时。
-
-| 目标 | 已核对事实 | 仍缺失 |
-|---|---|---|
-| Codex | 系统 standalone 0.170.0；官方 provider 的包依赖 0.153.4；订阅插件 3.2.25 的 provider 支持 model/effort，但要求专用 0.167.0 alias。三者不能混同。 | 专用 CLI 准备、细粒度权限根与网络策略、递归关闭、整树取消及真实模型回执实测。 |
-| agy | CLI help 明确提供 `--model`、`--effort`、`--sandbox`、`--mode`、ACP。现有 agy-link 0.6.38 是 LLM adapter/工具，不是本插件已验证的 Agent 后端。 | 默认 skip 权限、自动重放、非 DSH subprocess 生命周期不能直接复用；需要新的安全接入验证。 |
-| Cursor | CLI help 提供 `--model`、`--sandbox enabled`、`--mode plan/ask`。 | 无已验证的 DSH 托管 provider；取消、权限及递归限制未测。 |
-
-当前代码对三个外部 executor **一律拒绝，设置页不可选择**。结构解析支持它们不代表已经实现调用。没有为达成演示使用 `--force`、自动批准 MCP、危险跳过权限或切换全局 backend。
-
-原生目标中的 `openai-codex` / `antigravity` 是既有 **LLM adapter 命名空间**，与外部 `codex` / `agy` 执行器不同。推荐清单使用已核对的精确 ID，再与 Host 目录匹配；目录可能由 adapter 缓存或 fallback 提供，仍不能据此保证认证、额度或权限。
-
-## 部署与 GUI
-
-本地构建已完成。当前 Host 插件清单已读取；本次新版本的安装与页面刷新后验证尚未完成。没有启动替代 Web 服务器。没有已认证浏览器控制，尚不能声称真实页面渲染、主题和截图验收通过。
-
-## 后续验收
-
-1. 通过原生插件管理器把构建包安装到现有 Host，按返回结果处理是否需要重启。
-2. 刷新原 GUI，验证七卡片、迁移提示、推荐差异与实际保存。
-3. 为外部后端补足受控 provider、专用 runtime 与权限／递归／取消测试后，逐个解除门禁。
-4. 做三执行器真实 end-to-end 验证，再决定是否满足[完整实施方案](<IMPLEMENTATION_PLAN.md>)。
+- 浏览器实际渲染与交互验收：需在目标 DSH Web 实例安装新包并刷新页面后人工核对（打包脚本仅验证客户端模块加载与双插槽注册，不替代真实浏览器视觉与交互验收）。

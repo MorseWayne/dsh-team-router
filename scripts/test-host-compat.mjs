@@ -118,7 +118,7 @@ try {
   // layering.test.ts inspects source files and is meaningless against stubs.
   cpSync(join(repo, 'test'), join(dir, 'test'), { recursive: true });
   rmSync(join(dir, 'test', 'layering.test.ts'), { force: true });
-  const publicModules = { index: pkg, 'core/categories': `${pkg}/categories`, 'core/policy': `${pkg}/policy`, 'core/routing-policy': `${pkg}/routing-policy` };
+  const publicModules = { index: pkg, 'core/categories': `${pkg}/categories`, 'core/active-registry': `${pkg}/active-registry`, 'core/routing-policy': `${pkg}/routing-policy` };
   const libRoot = join(installed, 'lib');
   for (const rel of readdirSync(libRoot, { recursive: true }).map(String).sort()) {
     if (!rel.endsWith('.js') || rel === 'client.js') continue;

@@ -1,361 +1,157 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
-  CATEGORIES, CATEGORY_IDS, CATEGORY_LIST, categorySelectionGuidance, getCategory, isCategoryId,
+  BUILTINS, BUILTIN_GROUPS, BUILTIN_IDS, BUILTIN_LIST, CLASSIC7_IDS, CUSTOM_CATEGORY_TEMPLATES,
+  CUSTOM_ID_PATTERN, MAX_CUSTOM_CATEGORIES, generateCustomCategoryId, getBuiltinCategory, isBuiltinId,
 } from '../src/core/categories.ts';
-import {
-  createDefaultRoutingPolicy, parseRoutingPolicy, parseTarget, resolveRoutingSnapshot,
-} from '../src/core/routing-policy.ts';
-import type { Target } from '../src/core/routing-policy.ts';
+import { createDefaultRoutingConfig, parseBinding, parseRoutingConfig, parseTarget, routingConfigFingerprint } from '../src/core/routing-policy.ts';
+import type { CustomCategory } from '../src/core/routing-policy.ts';
 
-const native = (id = 'native-model'): Target => ({
-  executor: 'native', model: { mode: 'explicit', provider: 'provider', id },
+const target = { mode: 'explicit', provider: 'p', model: 'm' } as const;
+const custom = (id = 'custom-evidence'): CustomCategory => ({ id, name: 'Evidence', purpose: 'Verify sources.', enabled: true, proactive: false, binding: { mode: 'default' } });
+const rejectConfig = (value: unknown, expected: typeof TypeError | RegExp = TypeError) => assert.throws(() => parseRoutingConfig(value), expected);
+
+it('defines 12 ordered bilingual categories, classic subset and four template cards', () => {
+  assert.deepEqual(BUILTIN_IDS, ['visual-engineering', 'frontend-engineering', 'backend-data', 'deep', 'debugging', 'code-review',
+    'verification-automation', 'ultrabrain', 'artistry', 'writing', 'quick', 'unspecified']);
+  assert.deepEqual(Object.keys(BUILTIN_GROUPS), ['implementation', 'quality', 'analysis', 'general']);
+  assert.deepEqual(Object.values(BUILTIN_GROUPS).map(({ zh, en }) => [zh, en]), [
+    ['产品与工程实现', 'Product & engineering'], ['质量与交付', 'Quality & delivery'],
+    ['分析与表达', 'Analysis & expression'], ['通用与兜底', 'General & fallback'],
+  ]);
+  assert.deepEqual(BUILTIN_LIST.map(entry => entry.id), BUILTIN_IDS);
+  assert.deepEqual(CLASSIC7_IDS, ['visual-engineering', 'deep', 'ultrabrain', 'artistry', 'writing', 'quick', 'unspecified']);
+  assert.deepEqual(BUILTIN_LIST.filter(entry => !entry.proactive).map(entry => entry.id), ['quick', 'unspecified']);
+  for (const id of BUILTIN_IDS) {
+    const category = getBuiltinCategory(id);
+    assert.equal(category, BUILTINS[id]); assert.ok(isBuiltinId(id));
+    for (const locale of [category.en, category.zh]) {
+      assert.ok(Object.isFrozen(locale));
+      assert.deepEqual(Object.keys(locale), ['name', 'purpose', 'shortPurpose', 'avoid', 'example', 'deliverableCheck']);
+      for (const value of Object.values(locale)) assert.match(value, /^[^\r\n]+$/);
+    }
+  }
+  for (const id of ['Deep', ' deep', '__proto__', 'constructor', 'deep-high', undefined, Symbol(), { toString() { throw Error('coercion'); } }]) {
+    assert.equal(isBuiltinId(id), false); assert.throws(() => getBuiltinCategory(id), TypeError);
+  }
+  assert.deepEqual(CUSTOM_CATEGORY_TEMPLATES.map(x => x.templateId), ['evidence-check', 'security-audit', 'data-eval', 'safe-migration']);
+  for (const card of CUSTOM_CATEGORY_TEMPLATES) {
+    assert.equal(card.suggestedId, `custom-${card.templateId}`);
+    assert.deepEqual(Object.keys(card.en), ['name', 'purpose', 'avoid', 'example', 'nearBuiltin']);
+    assert.deepEqual(Object.keys(card.zh), Object.keys(card.en));
+    assert.ok(Object.isFrozen(card.en));
+  }
 });
-const external = (executor: 'codex' | 'agy' | 'cursor', id = 'external-model'): Target => ({
-  executor, model: { mode: 'explicit', id },
+
+it('generates ASCII slugs with deterministic fallback, collisions and length bounds', () => {
+  assert.equal(generateCustomCategoryId('证据核验'), 'custom-cat-1');
+  assert.equal(generateCustomCategoryId('证据核验', ['custom-cat-1', 'custom-cat-2']), 'custom-cat-3');
+  assert.equal(generateCustomCategoryId('Audit & Verify 中文'), 'custom-audit-verify');
+  assert.equal(generateCustomCategoryId('Audit & Verify 中文', ['custom-audit-verify']), 'custom-audit-verify-1');
+  for (const name of ['X', '000', '🧪', 'a---b', 'r'.repeat(200), `${'r'.repeat(30)}-suffix`]) {
+    const ids = new Set<string>();
+    for (let n = 0; n < 17; n++) {
+      const id = generateCustomCategoryId(name, ids);
+      assert.ok(CUSTOM_ID_PATTERN.test(id) && id.length >= 8 && id.length <= 40);
+      assert.ok(!ids.has(id)); ids.add(id);
+    }
+  }
 });
-const retired = ['deep-low', 'deep-high', 'unspecified-low', 'unspecified-high'];
 
-function rejects(input: unknown, pattern?: RegExp): void {
-  assert.throws(() => parseRoutingPolicy(input), pattern ?? TypeError);
-}
-
-function nullRecord(value: object): object {
-  return Object.assign(Object.create(null), value);
-}
-
-function poison(key: string): object {
-  return Object.defineProperty({}, key, { value: 'poison', enumerable: true });
-}
-
-/** Each insertion point lies on a parsed object boundary. */
-const containers: Array<(value: object) => unknown> = [
-  (value) => ({ version: 2, ...value }),
-  (value) => ({ version: 2, defaultTarget: value }),
-  (value) => ({ version: 2, defaultTarget: { executor: 'native', model: value } }),
-  (value) => ({ version: 2, categories: value }),
-  (value) => ({ version: 2, categories: { quick: value } }),
-  (value) => ({ version: 2, categories: { quick: { mode: 'target', target: value } } }),
-  (value) => ({ version: 2, categories: { quick: { mode: 'target', target: { executor: 'codex', model: value } } } }),
-];
-
-// Root must be passed directly in descriptor tests; spreading would invoke test getters.
-const boundaries = [(value: object) => value, ...containers.slice(1)];
-
-describe('seven category registry', () => {
-  it('defines exactly seven stable identifiers in the documented order', () => {
-    assert.deepEqual(CATEGORY_IDS, [
-      'visual-engineering', 'ultrabrain', 'deep', 'artistry', 'quick', 'unspecified', 'writing',
-    ]);
-    assert.deepEqual(CATEGORY_LIST.map((entry) => entry.id), CATEGORY_IDS);
-    assert.deepEqual(Object.keys(CATEGORIES), CATEGORY_IDS);
-    for (const id of CATEGORY_IDS) {
-      assert.equal(getCategory(id), CATEGORIES[id]);
-      assert.equal(isCategoryId(id), true);
-      for (const locale of ['en', 'zh'] as const) {
-        for (const field of ['name', 'purpose', 'avoid', 'example'] as const) {
-          assert.ok(getCategory(id)[locale][field].length > 0);
-        }
+describe('V3 strict parsing and fingerprint', () => {
+  it('defaults omitted top-level fields only, validates version, and detaches views', () => {
+    const a = createDefaultRoutingConfig(); const b = createDefaultRoutingConfig();
+    assert.deepEqual(a, b); assert.deepEqual(parseRoutingConfig({ version: 3 }), a);
+    assert.deepEqual(a, { version: 3, defaultTarget: { mode: 'inherit' }, behavior: { guidance: true, delegationMode: 'passive', strict: false }, builtins: {}, custom: [], historyLimit: 100 });
+    a.behavior.strict = true; a.builtins.deep = { enabled: false }; a.custom.push(custom());
+    assert.equal(b.behavior.strict, false); assert.deepEqual(b.builtins, {}); assert.deepEqual(b.custom, []);
+    for (const input of [undefined, null, {}, { version: 1 }, { version: 2 }, { version: '3' }]) rejectConfig(input);
+    for (const key of ['defaultTarget', 'behavior', 'builtins', 'custom', 'historyLimit']) {
+      rejectConfig({ version: 3, [key]: null }); rejectConfig({ version: 3, [key]: undefined });
+    }
+    for (const key of ['policyV2', 'routes', 'rules', 'roles', 'categories', 'stateDir']) rejectConfig({ version: 3, [key]: undefined }, /unknown field/);
+  });
+  it('normalizes only redundant overrides and validates exact bindings/targets', () => {
+    const config = parseRoutingConfig({ version: 3, builtins: {
+      writing: {}, quick: { enabled: true, binding: { mode: 'default' } },
+      deep: { enabled: false, binding: { mode: 'default' } }, artistry: { enabled: true, binding: target },
+    } });
+    assert.deepEqual(config.builtins, { deep: { enabled: false }, artistry: { binding: target } });
+    assert.notEqual(config.builtins.artistry?.binding, target);
+    assert.deepEqual(parseTarget({ ...target, provider: ' p ', model: ' m ', reasoningEffort: ' high ' }), { ...target, reasoningEffort: 'high' });
+    assert.deepEqual(parseBinding({ mode: 'default' }), { mode: 'default' });
+    assert.deepEqual(parseBinding({ mode: 'inherit' }), { mode: 'inherit' });
+    for (const invalid of [null, {}, { mode: ' default ' }, { mode: 'target', target }, { ...target, id: 'x' }, { mode: 'inherit', reasoningEffort: 'high' }]) {
+      assert.throws(() => parseTarget(invalid), TypeError); assert.throws(() => parseBinding(invalid), TypeError);
+    }
+    assert.throws(() => parseTarget({ mode: 'default' }), TypeError);
+    for (const key of ['Deep', 'deep ', 'deep-high', 'custom-test']) rejectConfig({ version: 3, builtins: { [key]: {} } }, /unknown builtin/);
+    for (const value of [true, { enabled: undefined }, { enabled: 'false' }, { binding: null }, { binding: undefined }]) {
+      rejectConfig({ version: 3, builtins: { writing: value } });
+    }
+  });
+  it('validates Unicode code point lengths and rejects controls before trim', () => {
+    for (const [field, limit] of [['provider', 128], ['model', 128], ['reasoningEffort', 48]] as const) {
+      assert.equal((parseTarget({ ...target, [field]: '🧪'.repeat(limit) }) as typeof target)[field], '🧪'.repeat(limit));
+      assert.throws(() => parseTarget({ ...target, [field]: '🧪'.repeat(limit + 1) }));
+      for (const value of ['', '   ', null, false, 'line\n', '\tleading', 'a\u0085b', 'a\u2028b', 'a\u2029b', '\u200fA', 'X\u202e', 'X\u2069']) {
+        assert.throws(() => parseTarget({ ...target, [field]: value }), TypeError);
+      }
+    }
+    for (const [field, limit] of [['name', 40], ['purpose', 120], ['avoid', 80]] as const) {
+      assert.equal(parseRoutingConfig({ version: 3, custom: [{ ...custom(), [field]: '🧪'.repeat(limit) }] }).custom[0]![field], '🧪'.repeat(limit));
+      for (const value of ['🧪'.repeat(limit + 1), '', ' ', undefined, null, 'line\r', '\u2066rtl']) {
+        rejectConfig({ version: 3, custom: [{ ...custom(), [field]: value }] });
       }
     }
   });
-
-  it('has no silent alias, case folding, whitespace trimming, or object coercion', () => {
-    for (const id of [...retired, 'explore', 'librarian', '', ' ', ' deep', 'Deep', 'deep ',
-      '__proto__', 'constructor', undefined, null, 42, Symbol('deep'), { toString() { throw new Error('coerced'); } }]) {
-      assert.equal(isCategoryId(id), false);
-      assert.throws(() => getCategory(id), TypeError);
+  it('bounds custom IDs, uniqueness, array contents and history', () => {
+    assert.equal(MAX_CUSTOM_CATEGORIES, 8);
+    for (const id of ['custom-a', `custom-${'z'.repeat(33)}`]) assert.equal(parseRoutingConfig({ version: 3, custom: [custom(id)] }).custom[0]!.id, id);
+    for (const id of ['custom-a\n', 'custom-a-', 'custom-9abc', 'custom-A', 'custom-中文', `custom-${'x'.repeat(34)}`, 'quick']) {
+      rejectConfig({ version: 3, custom: [custom(id)] }, /custom category ID/);
     }
-    assert.throws(() => getCategory('deep-high'), /use "deep" explicitly/);
-    assert.throws(() => getCategory('unspecified-low'), /use "unspecified" explicitly/);
-  });
-
-  it('freezes identifiers, the registry, entries and localized metadata', () => {
-    assert.ok(Object.isFrozen(CATEGORY_IDS));
-    assert.ok(Object.isFrozen(CATEGORIES));
-    assert.ok(Object.isFrozen(CATEGORY_LIST));
-    for (const entry of CATEGORY_LIST) {
-      assert.ok(Object.isFrozen(entry));
-      assert.ok(Object.isFrozen(entry.en));
-      assert.ok(Object.isFrozen(entry.zh));
+    rejectConfig({ version: 3, custom: [custom(), custom()] }, /duplicate/);
+    const entries = Array.from({ length: 9 }, (_, index) => custom(`custom-cat-${index}`));
+    assert.equal(parseRoutingConfig({ version: 3, custom: entries.slice(0, 8) }).custom.length, 8);
+    rejectConfig({ version: 3, custom: entries }, /at most 8/);
+    for (const candidate of [new Array(1), Object.assign([custom()], { extra: true }), Object.assign([custom()], { [Symbol()]: 1 }), new (class extends Array {})()]) {
+      rejectConfig({ version: 3, custom: candidate });
     }
-    assert.equal(Reflect.set(CATEGORIES.deep.en, 'name', 'changed'), false);
+    for (const historyLimit of [1, 1000]) assert.equal(parseRoutingConfig({ version: 3, historyLimit }).historyLimit, historyLimit);
+    for (const historyLimit of [0, 1001, 1.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, '100']) rejectConfig({ version: 3, historyLimit }, /historyLimit/);
   });
-
-  it('supplies deliverable-first Lead guidance in both languages without extra tiers', () => {
-    for (const locale of ['en', 'zh'] as const) {
-      const guidance = categorySelectionGuidance(locale);
-      for (const id of CATEGORY_IDS) assert.ok(guidance.includes(`${id} —`));
-      for (const id of retired) assert.ok(!guidance.includes(id));
-    }
-    const english = categorySelectionGuidance();
-    assert.match(english, /primary deliverable/);
-    assert.match(english, /use unspecified only/i);
-    assert.match(english, /grant no permissions/);
-    assert.match(english, /never.*automatically escalate\/replay/);
-    assert.match(categorySelectionGuidance('zh'), /不按任务中的关键词/);
-    assert.throws(() => categorySelectionGuidance('fr' as 'en'), TypeError);
-  });
-});
-
-describe('V2 policy parsing and target mapping', () => {
-  it('provides detached safe defaults, but never infers a version from legacy/invalid input', () => {
-    const first = createDefaultRoutingPolicy();
-    const second = createDefaultRoutingPolicy();
-    assert.deepEqual(first, second);
-    assert.notEqual(first, second);
-    assert.notEqual(first.defaultTarget, second.defaultTarget);
-    assert.notEqual(first.defaultTarget.model, second.defaultTarget.model);
-    assert.notEqual(first.categories, second.categories);
-    assert.equal(first.version, 2);
-    assert.equal(first.historyLimit, 100);
-    assert.equal(Object.getPrototypeOf(first.categories), null);
-    assert.deepEqual(first.defaultTarget, { executor: 'native', model: { mode: 'inherit' } });
-    assert.deepEqual(parseRoutingPolicy({ version: 2 }), first);
-    for (const input of [undefined, null, {}, { version: 1 }, { version: '2' }, { routes: {} }]) rejects(input);
-  });
-
-  it('resolves all seven categories from the default when overrides are absent', () => {
-    const policy = parseRoutingPolicy({ version: 2, defaultTarget: native('base') });
-    for (const category of CATEGORY_IDS) {
-      assert.deepEqual(resolveRoutingSnapshot(policy, category), {
-        category, source: 'default', target: native('base'), historyLimit: 100,
-      });
-    }
-  });
-
-  it('distinguishes category-default, native inheritance, and executor-default models', () => {
-    const policy = parseRoutingPolicy({
-      version: 2, defaultTarget: native('base'),
-      categories: {
-        quick: { mode: 'default' },
-        deep: { mode: 'target', target: { executor: 'native', model: { mode: 'inherit' } } },
-        writing: { mode: 'target', target: { executor: 'codex', model: { mode: 'executor-default' } } },
-      },
-    });
-    const fallback = resolveRoutingSnapshot(policy, 'quick');
-    assert.equal(fallback.source, 'default');
-    assert.deepEqual(fallback.target, native('base'));
-    const inherited = resolveRoutingSnapshot(policy, 'deep');
-    assert.equal(inherited.source, 'category');
-    assert.deepEqual(inherited.target, { executor: 'native', model: { mode: 'inherit' } });
-    const executorDefault = resolveRoutingSnapshot(policy, 'writing');
-    assert.equal(executorDefault.source, 'category');
-    assert.deepEqual(executorDefault.target, { executor: 'codex', model: { mode: 'executor-default' } });
-    assert.equal(Object.hasOwn(executorDefault.target.model, 'id'), false);
-  });
-
-  it('supports each external executor as both default and explicit category target', () => {
-    for (const executor of ['codex', 'agy', 'cursor'] as const) {
-      const chosen = external(executor);
-      const policy = parseRoutingPolicy({ version: 2, defaultTarget: chosen, categories: {
-        quick: { mode: 'target', target: { executor, model: { mode: 'executor-default' } } },
-      } });
-      assert.deepEqual(resolveRoutingSnapshot(policy, 'writing').target, chosen);
-      assert.equal(resolveRoutingSnapshot(policy, 'quick').target.model.mode, 'executor-default');
-    }
-  });
-
-  it('normalizes nonempty model fields while preserving adapter-owned effort values', () => {
-    assert.deepEqual(parseTarget({ executor: 'native', model: {
-      mode: 'explicit', provider: ' provider ', id: '\tmodel\n', reasoningEffort: ' vendor-specific ',
-    } }), { executor: 'native', model: {
-      mode: 'explicit', provider: 'provider', id: 'model', reasoningEffort: 'vendor-specific',
-    } });
-    const plain = parseTarget({ executor: 'agy', model: {
-      mode: 'explicit', id: 'custom/model', reasoningEffort: undefined,
-    } });
-    assert.equal(Object.hasOwn(plain.model, 'reasoningEffort'), false);
-  });
-
-  it('allows frozen and null-prototype data without invoking a mutation', () => {
-    const input = nullRecord({
-      version: 2,
-      defaultTarget: nullRecord({ executor: 'native', model: nullRecord({ mode: 'inherit' }) }),
-      categories: nullRecord({ deep: nullRecord({ mode: 'default' }) }),
-    });
-    Object.freeze(input);
-    assert.equal(resolveRoutingSnapshot(input, 'deep').target.model.mode, 'inherit');
-  });
-
-  it('is structural only and makes no claim of model access, availability, or actual usage', () => {
-    const policy = parseRoutingPolicy({ version: 2, defaultTarget: native('not-in-any-catalog') });
-    const snapshot = resolveRoutingSnapshot(policy, 'deep');
-    assert.deepEqual(snapshot.target, native('not-in-any-catalog'));
-    assert.equal(Object.hasOwn(snapshot, 'authorized'), false);
-    assert.equal(Object.hasOwn(snapshot, 'actualModel'), false);
-  });
-});
-
-describe('independent policy graphs and immutable snapshots', () => {
-  it('detaches parsed defaults, bindings and nested models from input and each other', () => {
-    const shared = { executor: 'native', model: { mode: 'explicit', provider: 'p', id: 'original' } };
-    const input = { version: 2, defaultTarget: shared, categories: { deep: { mode: 'target', target: shared } } };
-    const policy = parseRoutingPolicy(input);
-    shared.model.id = 'input-mutation';
-    const snapshot = resolveRoutingSnapshot(policy, 'deep', 17);
-    assert.equal(snapshot.target.model.mode, 'explicit');
-    if (snapshot.target.model.mode === 'explicit') assert.equal(snapshot.target.model.id, 'original');
-    assert.equal(snapshot.revision, 17);
-    assert.notEqual(policy.defaultTarget, policy.categories.deep?.mode === 'target' ? policy.categories.deep.target : undefined);
-    if (policy.defaultTarget.model.mode === 'explicit') policy.defaultTarget.model.id = 'default-mutation';
-    assert.deepEqual(resolveRoutingSnapshot(policy, 'deep').target, {
-      executor: 'native', model: { mode: 'explicit', provider: 'p', id: 'original' },
-    });
-    policy.categories.deep = { mode: 'default' };
-    policy.historyLimit = 1;
-    assert.equal(snapshot.source, 'category');
-    assert.equal(snapshot.historyLimit, 100);
-    assert.equal(Object.isFrozen(snapshot), true);
-    assert.equal(Object.isFrozen(snapshot.target), true);
-    assert.equal(Object.isFrozen(snapshot.target.model), true);
-    assert.equal(Reflect.set(snapshot.target.model, 'id', 'tampered'), false);
-  });
-
-  it('does not inherit a previous explicit model effort and does not share snapshots', () => {
-    const input = { version: 2, defaultTarget: {
-      executor: 'native', model: { mode: 'explicit', provider: 'p', id: 'm', reasoningEffort: 'high' },
-    } };
-    const first = resolveRoutingSnapshot(input, 'deep');
-    const second = resolveRoutingSnapshot({ version: 2, defaultTarget: native('next') }, 'deep');
-    assert.equal(Object.hasOwn(second.target.model, 'reasoningEffort'), false);
-    const third = resolveRoutingSnapshot(input, 'deep');
-    assert.notEqual(first, third);
-    assert.notEqual(first.target, third.target);
-    assert.notEqual(first.target.model, third.target.model);
-    assert.equal(Object.hasOwn(second, 'revision'), false);
-  });
-
-  it('revalidates potentially mutated typed policies before taking a snapshot', () => {
-    const policy = createDefaultRoutingPolicy();
-    Reflect.set(policy.categories, 'unknown', { mode: 'default' });
-    assert.throws(() => resolveRoutingSnapshot(policy, 'quick'), /invalid category|expected one of/);
-  });
-
-  it('validates optional configuration revisions without treating them as authorization', () => {
-    for (const revision of [0, 1, Number.MAX_SAFE_INTEGER]) {
-      assert.equal(resolveRoutingSnapshot({ version: 2 }, 'quick', revision).revision, revision);
-    }
-    for (const revision of [-1, 1.1, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, '1', null]) {
-      assert.throws(() => resolveRoutingSnapshot({ version: 2 }, 'quick', revision as number), /revision/);
-    }
-  });
-});
-
-describe('V2 exact schema and security boundaries', () => {
-  it('rejects unknown and retired category IDs as bindings or requested categories', () => {
-    for (const id of [...retired, 'other', ' deep', 'Deep', '', '__proto__', 'constructor', 'prototype']) {
-      rejects({ version: 2, categories: { [id]: { mode: 'default' } } });
-      assert.throws(() => resolveRoutingSnapshot({ version: 2 }, id), TypeError);
-    }
-    assert.throws(() => resolveRoutingSnapshot({ version: 2 }, undefined), TypeError);
-    rejects({ version: 2, categories: { 'deep-high': { mode: 'default' } } }, /use "deep" explicitly/);
-  });
-
-  it('rejects unknown root, binding, target and model fields even if undefined', () => {
-    for (const key of ['routes', 'rules', 'roles', 'defaultRoute', 'stateDir', 'extra']) {
-      rejects({ version: 2, [key]: undefined }, /unknown field/);
-    }
-    for (const model of [
-      { mode: 'inherit', id: undefined },
-      { mode: 'explicit', provider: 'p', id: 'm', extra: undefined },
-    ]) rejects({ version: 2, defaultTarget: { executor: 'native', model } }, /unknown field/);
-    rejects({ version: 2, defaultTarget: { ...native(), extra: true } }, /unknown field/);
-    rejects({ version: 2, categories: { quick: { mode: 'default', target: native() } } }, /unknown field/);
-    rejects({ version: 2, categories: { quick: { mode: 'target', target: native(), priority: 1 } } }, /unknown field/);
-  });
-
-  it('rejects incompatible discriminant branches and does not coerce enums', () => {
-    const invalid: unknown[] = [
-      { executor: 'native', model: { mode: 'executor-default' } },
-      { executor: 'codex', model: { mode: 'inherit' } },
-      { executor: 'native', model: { mode: 'explicit', id: 'm' } },
-      { executor: 'cursor', model: { mode: 'explicit', provider: 'p', id: 'm' } },
-      { executor: 'agy', model: { mode: 'executor-default', reasoningEffort: 'high' } },
-      { executor: 'native', model: { mode: 'inherit', reasoningEffort: 'high' } },
-      { executor: 'other', model: { mode: 'executor-default' } },
-      { executor: ' codex ', model: { mode: 'executor-default' } },
-      { executor: 'native', model: { mode: ' explicit ', provider: 'p', id: 'm' } },
-      { executor: 'native', model: { mode: 'default' } },
-      { executor: 'native' }, {},
+  it('rejects unsafe keys, symbols, extra hidden fields, getters and prototypes at every boundary', () => {
+    let called = false;
+    const getter = { get() { called = true; throw new Error('never invoke the getter'); } };
+    const contexts: Array<[string, (value: unknown) => unknown]> = [
+      ['version', x => x], ['mode', x => ({ version: 3, defaultTarget: x })],
+      ['guidance', x => ({ version: 3, behavior: x })], ['quick', x => ({ version: 3, builtins: x })],
+      ['enabled', x => ({ version: 3, builtins: { quick: x } })], ['mode', x => ({ version: 3, builtins: { quick: { binding: x } } })],
+      ['name', x => ({ version: 3, custom: [x] })], ['mode', x => ({ version: 3, custom: [{ ...custom(), binding: x }] })],
     ];
-    for (const value of invalid) assert.throws(() => parseTarget(value), TypeError);
-    for (const value of [{ mode: 'target' }, { mode: 'other' }, { mode: ' default ' }, {}]) {
-      rejects({ version: 2, categories: { quick: value } });
+    for (const [firstField, wrap] of contexts) {
+      for (const key of ['__proto__', 'prototype', 'constructor']) rejectConfig(wrap(Object.defineProperty({}, key, { value: 1 })), /unsafe key/);
+      rejectConfig(wrap({ [Symbol()]: true }), /symbol fields/);
+      rejectConfig(wrap(Object.defineProperty({}, firstField, getter)), /own data property/);
+      rejectConfig(wrap(Object.create(Object.defineProperty({}, firstField, getter))), /plain object/);
+      rejectConfig(wrap(new Date()), /plain object/);
     }
+    rejectConfig({ version: 3, custom: Object.defineProperty([custom()], 0, getter) }, /own data property/);
+    rejectConfig(Object.defineProperty({ version: 3 }, 'hidden', { value: true }), /unknown field/);
+    assert.deepEqual(parseRoutingConfig(Object.freeze(Object.assign(Object.create(null), { version: 3 }))), createDefaultRoutingConfig());
+    assert.equal(called, false);
   });
-
-  it('rejects empty or non-string IDs and efforts without coercion', () => {
-    for (const value of ['', ' \t\n', null, 0, false, {}, [], Symbol('id')]) {
-      for (const field of ['id', 'provider', 'reasoningEffort']) {
-        assert.throws(() => parseTarget({ executor: 'native', model: {
-          mode: 'explicit', provider: 'p', id: 'm', [field]: value,
-        } }), TypeError);
-      }
-    }
-  });
-
-  it('accepts history endpoints but rejects fractional, unsafe and nonnumeric limits', () => {
-    for (const historyLimit of [1, 100, 1000]) {
-      assert.equal(parseRoutingPolicy({ version: 2, historyLimit }).historyLimit, historyLimit);
-    }
-    for (const historyLimit of [0, -1, 1001, 0.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1, '100', null, undefined]) {
-      rejects({ version: 2, historyLimit }, /historyLimit/);
-    }
-  });
-
-  it('never resets present malformed data to defaults', () => {
-    for (const value of [null, undefined, false, [], 'value']) {
-      rejects({ version: 2, defaultTarget: value });
-      rejects({ version: 2, categories: value });
-      rejects({ version: 2, categories: { quick: value } });
-    }
-  });
-
-  it('rejects non-plain objects at every parsed boundary', () => {
-    for (const value of [[], new Date(), new Map(), /pattern/, Object.create({ inherited: true }), new (class Example {})()]) {
-      for (const wrap of boundaries) rejects(wrap(value), /plain object/);
-    }
-  });
-
-  it('rejects getters and setters at every boundary without invoking them', () => {
-    let invoked = 0;
-    for (const wrap of boundaries) {
-      for (const enumerable of [true, false]) {
-        const value = Object.defineProperty({}, 'field', {
-          enumerable,
-          get() { invoked += 1; throw new Error('getter must never execute'); },
-        });
-        rejects(wrap(value), /data property/);
-        const setter = Object.defineProperty({}, 'field', { set() { invoked += 1; } });
-        rejects(wrap(setter), /data property/);
-      }
-    }
-    assert.equal(invoked, 0);
-  });
-
-  it('rejects prototype pollution keys and symbols at all object boundaries', () => {
-    for (const wrap of boundaries) {
-      for (const key of ['__proto__', 'prototype', 'constructor']) rejects(wrap(poison(key)), /unsafe key/);
-      rejects(wrap({ [Symbol('field')]: true }), /symbol fields/);
-    }
-    assert.equal(Object.hasOwn(Object.prototype, 'polluted'), false);
-  });
-
-  it('does not discard non-enumerable fields, including unknown ones', () => {
-    rejects(Object.defineProperty({ version: 2 }, 'hidden', { value: undefined }), /unknown field/);
-    const source = Object.defineProperty({}, 'version', { value: 2 });
-    assert.equal(parseRoutingPolicy(source).version, 2);
-    const model = Object.defineProperty({ mode: 'inherit' }, 'hidden', { value: true });
-    rejects({ version: 2, defaultTarget: { executor: 'native', model } }, /unknown field/);
-  });
-
-  it('rejects inherited malicious getters without reading them', () => {
-    let invoked = false;
-    const prototype = Object.defineProperty({}, 'version', {
-      get() { invoked = true; throw new Error('must not read inherited value'); },
-    });
-    rejects(Object.create(prototype), /plain object/);
-    assert.equal(invoked, false);
+  it('fingerprints all effective settings canonically, independent of input ordering', () => {
+    const base = { version: 3, builtins: { deep: { binding: target }, quick: {} }, custom: [custom('custom-z'), custom('custom-a')] };
+    const reordered = { custom: [...base.custom].reverse(), builtins: { quick: { enabled: true, binding: { mode: 'default' } }, deep: { binding: target } }, version: 3 };
+    const fingerprint = routingConfigFingerprint(base);
+    assert.equal(fingerprint, routingConfigFingerprint(reordered));
+    assert.equal(JSON.parse(fingerprint).builtins.length, 12);
+    for (const update of [
+      { defaultTarget: target }, { historyLimit: 1 }, { behavior: { guidance: false, strict: false, delegationMode: 'passive' } },
+      { builtins: { deep: { binding: target }, quick: { enabled: false } } },
+      { custom: [custom('custom-z'), { ...custom('custom-a'), proactive: true }] },
+    ]) assert.notEqual(fingerprint, routingConfigFingerprint({ ...base, ...update }));
   });
 });

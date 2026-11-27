@@ -3,17 +3,14 @@ import { existsSync, mkdirSync, openSync, writeFileSync, fsyncSync, closeSync, r
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { parseTarget } from './routing-policy.ts';
-import type { Target } from './routing-policy.ts';
-import { CATEGORY_IDS } from './categories.ts';
-import type { CategoryId } from './categories.ts';
-import type { NormalizedConfig } from './policy.ts';
 
 const LIMIT = 4 * 1024 * 1024;
 // Stable across plugin hot reloads in one Node process, different after a restart
 // even when the OS reuses a PID. This is an identity tag, not a liveness probe.
 const PROCESS_EPOCH = `${process.pid}:${performance.timeOrigin}`;
 const recordSchema = z.object({
-  id: z.string().min(1), category: z.enum(CATEGORY_IDS), source: z.enum(['default', 'category']),
+  id: z.string().min(1), categoryId: z.string().min(1).max(64), categoryNameAtStart: z.string().min(1).max(80),
+  categoryOrigin: z.enum(['builtin', 'custom']), source: z.enum(['default', 'category']),
   policyDigest: z.string().regex(/^[a-f0-9]{64}$/), target: z.unknown().transform(parseTarget), ownerProcess: z.string().optional(),
   state: z.enum(['preparing', 'running', 'completed', 'failed', 'cancelling', 'cancelled', 'unknown']),
   createdAt: z.string(), updatedAt: z.string(), childId: z.string().optional(), name: z.string().optional(),
@@ -21,16 +18,19 @@ const recordSchema = z.object({
 }).strict();
 export type ExecutionRecord = z.infer<typeof recordSchema>;
 export type ExecutionState = ExecutionRecord['state'];
-const fileSchema = z.object({ version: z.literal(2), teamId: z.string(), records: z.array(recordSchema) }).strict();
+const fileSchema = z.object({ format: z.literal(1), teamId: z.string(), records: z.array(recordSchema) }).strict();
 const terminal = new Set<ExecutionState>(['completed', 'failed', 'cancelled', 'unknown']);
 export const policyDigest = (policy: unknown): string => createHash('sha256').update(JSON.stringify(policy)).digest('hex');
 
-/** Separate v2 files: old member baselines/overrides/history are never reinterpreted. */
+/** Separate execution files; older state formats are not reinterpreted. */
 export class ExecutionStore {
   readonly directory: string;
   private readonly owned = new Set<string>();
   constructor(directory: string) { this.directory = resolve(directory); }
-  private path(teamId: string): string { return join(this.directory, 'v2', `${policyDigest(teamId)}.json`); }
+  private path(teamId: string): string {
+    if (typeof teamId !== 'string' || teamId.trim().length === 0) throw new Error('Invalid routing team ID');
+    return join(this.directory, 'executions', `${policyDigest(teamId)}.json`);
+  }
 
   private atomic(path: string, value: unknown, directory: string): void {
     const content = `${JSON.stringify(value, null, 2)}\n`;
@@ -46,17 +46,6 @@ export class ExecutionStore {
       if (fd !== undefined) closeSync(fd);
       if (existsSync(temporary)) unlinkSync(temporary);
     }
-  }
-
-  backupLegacy(legacy: NormalizedConfig): string {
-    const directory = join(this.directory, 'migrations');
-    const path = join(directory, `legacy-${policyDigest(legacy)}.json`);
-    if (existsSync(path)) {
-      if (statSync(path).size > LIMIT) throw new Error('Legacy backup exceeds 4 MiB');
-      const saved: unknown = JSON.parse(readFileSync(path, 'utf8'));
-      if (JSON.stringify(saved) !== JSON.stringify({ version: 1, legacy })) throw new Error('Legacy backup does not match; preserve it and investigate');
-    } else this.atomic(path, { version: 1, legacy }, directory);
-    return path;
   }
 
   private records(teamId: string): ExecutionRecord[] {
@@ -80,18 +69,18 @@ export class ExecutionStore {
   }
 
   private commit(teamId: string, records: ExecutionRecord[], historyLimit: number): void {
-    if (!Number.isInteger(historyLimit) || historyLimit < 1 || historyLimit > 1000) throw new Error('Invalid history limit');
+    if (!Number.isSafeInteger(historyLimit) || historyLimit < 1 || historyLimit > 1000) throw new Error('Invalid history limit');
     let finished = records.filter(record => terminal.has(record.state)).length;
     const next = records.filter(record => !terminal.has(record.state) || finished-- <= historyLimit);
-    const value = { version: 2 as const, teamId, records: next };
+    const value = { format: 1 as const, teamId, records: next };
     while (Buffer.byteLength(JSON.stringify(value, null, 2)) + 1 > LIMIT) {
       const index = next.findIndex(record => terminal.has(record.state));
       if (index < 0) throw new Error('Active routing state exceeds 4 MiB');
       next.splice(index, 1);
     }
-    this.atomic(this.path(teamId), value, join(this.directory, 'v2'));
+    this.atomic(this.path(teamId), value, join(this.directory, 'executions'));
   }
-  begin(teamId: string, input: { category: CategoryId; source: 'category' | 'default'; target: Target; policyDigest: string }, limit: number): ExecutionRecord {
+  begin(teamId: string, input: Pick<ExecutionRecord, 'categoryId' | 'categoryNameAtStart' | 'categoryOrigin' | 'source' | 'target' | 'policyDigest'>, limit: number): ExecutionRecord {
     const now = new Date().toISOString();
     const record = recordSchema.parse({ ...input, ownerProcess: PROCESS_EPOCH, id: randomUUID(), state: 'preparing', createdAt: now, updatedAt: now });
     this.commit(teamId, [...this.records(teamId), record], limit);

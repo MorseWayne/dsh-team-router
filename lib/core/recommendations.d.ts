@@ -1,5 +1,5 @@
-import type { CategoryId } from './categories.ts';
-import type { CategoryBinding, RoutingPolicyV2, Target } from './routing-policy.ts';
+import type { BuiltinGroupId, BuiltinId } from './categories.ts';
+import type { Binding, RoutingConfig, Target } from './routing-policy.ts';
 export interface CatalogModel {
     id: string;
     name: string;
@@ -27,33 +27,28 @@ export interface RecommendationCandidate {
     readonly provider: string;
     readonly model: string;
 }
-/**
- * Curated, exact IDs, not benchmark rankings or a promise of account availability.
- * These public model names are examples of suitable capabilities. Provider IDs must
- * match the actual Host exactly; no aliases, fuzzy matching, price or authorization claims.
- */
-export declare const RECOMMENDATION_VERSION = "2026-11-24.1";
-export declare const RECOMMENDATION_CANDIDATES: Readonly<Record<CategoryId, readonly RecommendationCandidate[]>>;
+/** Curated exact IDs, not benchmark rankings or promises of availability or authorization. */
+export declare const RECOMMENDATION_VERSION = "2026-11-27.1";
+export declare const RECOMMENDATION_CANDIDATES: Readonly<Record<BuiltinId, readonly RecommendationCandidate[]>>;
 export interface RecommendationChange {
-    category: CategoryId;
-    before: CategoryBinding;
-    after: {
-        mode: 'target';
-        target: Target;
-    };
+    category: BuiltinId;
+    before: Binding;
+    after: Extract<Target, {
+        mode: 'explicit';
+    }>;
 }
 export interface RecommendationPreview {
     manifestVersion: string;
     baselineFingerprint: string;
-    policy: RoutingPolicyV2;
+    config: RoutingConfig;
     changes: RecommendationChange[];
-    preserved: CategoryId[];
-    unavailable: CategoryId[];
+    preserved: BuiltinId[];
+    unavailable: BuiltinId[];
+    skippedDisabled: BuiltinId[];
     overwrite: boolean;
+    group?: BuiltinGroupId;
 }
-/** Stable across category insertion order and absent versus explicit default bindings. */
-export declare function routingPolicyFingerprint(input: unknown): string;
-/** Read-only preview. Applying it to a draft and persisting it are separate user actions. */
 export declare function previewRecommendations(input: unknown, catalog: ModelCatalog, options?: {
     overwrite?: boolean;
+    group?: BuiltinGroupId;
 }): RecommendationPreview;

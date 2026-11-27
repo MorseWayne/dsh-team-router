@@ -1,7 +1,6 @@
-# Install AFTER the official Agent Teams bundle. No native rows are replaced.
-# Do not inject policyV2 into this composition layer: legacy user configuration
-# must remain detectable until the user explicitly confirms migration.
-# Empty configuration renders all seven presets with safe native inheritance.
+# dsh-team-router 1.0.0 — install after the official Agent Teams bundle.
+# No native rows are replaced. Omitted routing uses the V3 defaults: all 12
+# built-ins enabled with inherited targets, passive guidance, and strict off.
 - insert:
     - id: team-router
       name: dsh-team-router

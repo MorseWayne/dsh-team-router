@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { AgentOptions } from '@deepseek-ai/dsh-agent';
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection';
+import { promptString } from '../../core/prompt-metadata.ts';
 
 const allowedRoutes = z.array(z.object({ provider: z.string().min(1), model: z.string().min(1) }).strict()).min(1);
 export type AuthorizedRoute = z.infer<typeof allowedRoutes>[number];
@@ -30,5 +31,5 @@ export function assertAuthorizedRoute(routes: readonly AuthorizedRoute[] | null,
   const allowed = routes === null
     ? selected.provider === parent.provider && selected.model === parent.model
     : routes.some(route => route.provider === selected.provider && route.model === selected.model);
-  if (!allowed) throw new Error(`Model route "${selected.provider}/${selected.model}" is not authorized for this Session. Save the routing policy, then retry in a new Session or use the inherited model.`);
+  if (!allowed) throw new Error(`Model route (${promptString(selected.provider)}, ${promptString(selected.model)}) is not authorized for this Session. Review routing and opt in to the model in a new Session, or use inheritance.`);
 }

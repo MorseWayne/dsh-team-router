@@ -1,8 +1,9 @@
-import type { CategoryBinding, Target } from '../core/routing-policy.ts';
+import { requiredGrantPairs, resolveActiveRegistry } from '../core/active-registry.ts';
+import type { RoutingConfig } from '../core/routing-policy.ts';
 
 // DSH Web's Host entry id (not the similarly named UI section).
 export const MODEL_AUTHORIZATION_ENTRY = 'subagent-model-selection-settings';
-type Route = { provider: string; model: string };
+export type Route = { provider: string; model: string };
 export interface ModelAuthorizationForm {
   getSnapshot(): {
     status: 'loading' | 'unavailable' | 'ready'; writable: boolean; revision?: number | undefined;
@@ -14,17 +15,9 @@ export interface ModelAuthorizationForm {
 }
 const key = (route: Route) => JSON.stringify([route.provider, route.model]);
 
-/** Only active, explicit native routes participate; neither effort nor unused editor choices grant access. */
-export function requiredModelRoutes(policy: { defaultTarget: Target; categories: Partial<Record<string, CategoryBinding>> }): Route[] {
-  const routes = new Map<string, Route>();
-  const add = (target: Target) => {
-    if (target.executor !== 'native' || target.model.mode !== 'explicit') return;
-    const route = { provider: target.model.provider, model: target.model.id };
-    routes.set(key(route), route);
-  };
-  add(policy.defaultTarget);
-  for (const binding of Object.values(policy.categories)) if (binding?.mode === 'target') add(binding.target);
-  return [...routes.values()];
+/** Only active, explicit native routes participate; disabled categories and unused defaults never require grants. */
+export function requiredModelRoutes(config: RoutingConfig | unknown): Route[] {
+  return requiredGrantPairs(resolveActiveRegistry(config));
 }
 
 export type GrantProblem = 'loading' | 'unserved' | 'invalid' | 'readOnly';
@@ -32,12 +25,16 @@ export type GrantProblem = 'loading' | 'unserved' | 'invalid' | 'readOnly';
 export function isAllowedModelArray(value: unknown): value is Route[] {
   if (!Array.isArray(value)) return false;
   for (const row of value) {
-    if (typeof row?.provider !== 'string' || !row.provider.length || typeof row.model !== 'string' || !row.model.length) return false;
+    if (typeof row?.provider !== 'string' || !row.provider.length || typeof row?.model !== 'string' || !row.model.length) return false;
   }
   return true;
 }
 
-type GrantPlan = { kind: 'complete' | 'readOnly' } | { kind: 'unavailable'; reason: Exclude<GrantProblem, 'readOnly'> } | { kind: 'write'; revision: number; routes: Route[] };
+export type GrantPlan =
+  | { kind: 'complete' | 'readOnly' }
+  | { kind: 'unavailable'; reason: Exclude<GrantProblem, 'readOnly'> }
+  | { kind: 'write'; revision: number; routes: Route[] };
+
 export function planModelGrant(required: Route[], snapshot: ReturnType<ModelAuthorizationForm['getSnapshot']>): GrantPlan {
   if (!required.length) return { kind: 'complete' };
   const { value, revision } = snapshot;
