@@ -3,11 +3,14 @@ import type { CategoryId } from './categories.ts';
 import { resolveRoutingSnapshot } from './routing-policy.ts';
 import type { RoutingPolicyV2 } from './routing-policy.ts';
 
-export type DelegationMode = 'passive' | 'specialist-first';
+export const DELEGATION_MODES = Object.freeze(['passive', 'specialist-first', 'orchestrator'] as const);
+export type DelegationMode = typeof DELEGATION_MODES[number];
 
 export function isDelegationMode(value: unknown): value is DelegationMode {
-  return value === 'passive' || value === 'specialist-first';
+  return DELEGATION_MODES.some(mode => mode === value);
 }
+
+type ProactiveMode = Exclude<DelegationMode, 'passive'>;
 
 export interface RoutePair {
   readonly provider: string;
@@ -37,8 +40,8 @@ export interface SessionRouteContext {
    */
   readonly delegationMode?: DelegationMode;
   /**
-   * Only root (top-level) agents receive proactive delegation guidance; child
-   * subagents stay passive to prevent recursive delegation loops. Defaults to `true`.
+   * Only confirmed root (top-level) agents receive proactive delegation guidance;
+   * child subagents stay passive to prevent recursive delegation loops.
    */
   readonly isRoot?: boolean;
 }
@@ -64,7 +67,7 @@ export type SubagentValidationResult =
  * `quick` and `unspecified` stay passive so small requests and general Q&A
  * are never unnecessarily offloaded to a subagent.
  */
-const PROACTIVE_SPECIALIST_CATEGORIES: ReadonlySet<CategoryId> = new Set([
+export const PROACTIVE_SPECIALIST_CATEGORIES: ReadonlySet<CategoryId> = new Set([
   'visual-engineering', 'ultrabrain', 'deep', 'artistry', 'writing',
 ]);
 
@@ -76,23 +79,21 @@ function isRouteAuthorized(route: RoutePair, session?: SessionRouteContext): boo
   return session.authorizedRoutes.some(entry => entry.provider === route.provider && entry.model === route.model);
 }
 
-function isDistinctFromParent(route: ExplicitNativeRoute, parent?: SessionRouteContext['parentRoute']): boolean {
-  if (parent?.provider === undefined || parent.model === undefined) return true;
-  if (route.provider !== parent.provider || route.model !== parent.model) return true;
-  if (route.reasoningEffort !== undefined && route.reasoningEffort !== parent.reasoningEffort) return true;
-  return false;
+type ExplicitCategoryRoute = ResolvedCategoryRoute & { readonly route: ExplicitNativeRoute };
+
+function proactiveMode(session?: SessionRouteContext): ProactiveMode | undefined {
+  const mode = session?.delegationMode;
+  return session?.isRoot === true && (mode === 'specialist-first' || mode === 'orchestrator') ? mode : undefined;
 }
 
-function proactiveSpecialistCategories(plan: NativeRoutingPlan, session?: SessionRouteContext): CategoryId[] {
-  if (session?.delegationMode !== 'specialist-first') return [];
-  if (session.isRoot === false) return [];
-  return plan.entries
-    .filter((entry): entry is ResolvedCategoryRoute & { readonly route: ExplicitNativeRoute } =>
-      entry.mode === 'explicit'
-      && entry.route !== undefined
-      && PROACTIVE_SPECIALIST_CATEGORIES.has(entry.category)
-      && isDistinctFromParent(entry.route, session.parentRoute))
-    .map(entry => entry.category);
+function distinctSpecialistRoutes(plan: NativeRoutingPlan, parent: SessionRouteContext['parentRoute']): ExplicitCategoryRoute[] {
+  if (!parent?.provider || !parent.model) return [];
+  return plan.entries.filter((entry): entry is ExplicitCategoryRoute =>
+    entry.mode === 'explicit'
+    && entry.route !== undefined
+    && PROACTIVE_SPECIALIST_CATEGORIES.has(entry.category)
+    && (entry.route.provider !== parent.provider || entry.route.model !== parent.model
+      || entry.route.reasoningEffort !== parent.reasoningEffort));
 }
 
 function routeKey(route: ExplicitNativeRoute): string {
@@ -157,6 +158,38 @@ function formatCategoryTable(plan: NativeRoutingPlan): string[] {
   });
 }
 
+const BRIDGE_GUIDANCE = 'If namespaced or bridged, use the host `subagent` exposing `provider` and `model`, not an adapter-local subagent.';
+const FOLLOWUP_GUIDANCE = 'This also applies to multi-turn follow-ups and implementation after plan approval. Respect explicit requests to answer or execute directly.';
+
+function proactiveGuidance(mode: ProactiveMode, specialists: ExplicitCategoryRoute[], tool: string): string {
+  const categories = specialists.map(entry => entry.category).join(', ');
+  return mode === 'orchestrator'
+    ? `Orchestrator delegation is enabled: scope and assign substantive deliverables in these distinct specialist categories (${categories}). You must delegate execution via ${tool}, then verify and summarize. Handle only simple Q&A, clarification, plan alignment, and tiny single-point edits yourself. ${FOLLOWUP_GUIDANCE}`
+    : `Specialist-first delegation is enabled for this session: proactively delegate substantive work by primary deliverable in these distinct specialist categories (${categories}) via ${tool}, then verify and summarize. Handle simple Q&A, quick clarifications, and tiny edits directly. ${FOLLOWUP_GUIDANCE}`;
+}
+
+/** Compact, turn-local policy. The host decides when and how to attach it. */
+export function buildNativeSubagentReminder(policy: RoutingPolicyV2, session: SessionRouteContext): string {
+  const mode = proactiveMode(session);
+  if (mode === undefined) return '';
+  const specialists = distinctSpecialistRoutes(buildNativeRoutingPlan(policy, session), session.parentRoute);
+  if (specialists.length === 0) return '';
+  const instruction = mode === 'orchestrator'
+    ? 'Scope and verify; you must delegate matching substantive deliverables.'
+    : 'Proactively delegate matching substantive deliverables; handle simple questions and tiny edits directly.';
+  const routes = specialists.map(({ category, route }) => {
+    const values = [route.provider, route.model];
+    if (route.reasoningEffort !== undefined) values.push(route.reasoningEffort);
+    return `${category}: ${values.map(value => JSON.stringify(value)).join(', ')}`;
+  });
+  return [
+    `[team-router: ${mode}] ${instruction} This includes follow-ups and post-approval implementation. Honor explicit requests to answer or execute directly.`,
+    'Use the host `subagent` accepting `provider`/`model` (including bridged or namespaced), not a local subagent.',
+    'Routes (provider, model, reasoning_effort if listed):',
+    ...routes,
+  ].join('\n');
+}
+
 /**
  * System prompt section for agents whose native `subagent` tool exposes
  * `provider` / `model` selection. Returns an empty string when no category
@@ -165,15 +198,15 @@ function formatCategoryTable(plan: NativeRoutingPlan): string[] {
 export function buildNativeSubagentGuidance(policy: RoutingPolicyV2, session?: SessionRouteContext): string {
   const plan = buildNativeRoutingPlan(policy, session);
   if (plan.explicitRoutes.length === 0) return '';
-  const specialists = proactiveSpecialistCategories(plan, session);
   const lines = [
     'Task-category model routing is configured for the `subagent` tool.',
     'When delegating a self-contained task with `subagent`, classify the task by its primary deliverable (not keywords) and pass the matching `provider`, `model`, and `reasoning_effort` from the table below. Omit `reasoning_effort` when not listed, and omit all three fields for categories that inherit the parent model. Do not override models on `subagent_fork` or existing agents, and do not disguise a category to pick another model. Categories grant no extra permissions.',
+    BRIDGE_GUIDANCE,
   ];
-  if (specialists.length > 0) {
-    lines.push(
-      `Specialist-first delegation is enabled for this session: when a substantive user request clearly fits one of these specialist categories whose configured model differs from your current session model (${specialists.join(', ')}), proactively delegate that self-contained work via \`subagent\` using the matching route below, then verify and synthesize the result. Answer simple Q&A, quick clarifications, small one-off edits, or tightly conversational follow-ups directly yourself without spawning a subagent, and never delegate when the user asks you to answer directly.`,
-    );
+  const mode = proactiveMode(session);
+  const specialists = mode === undefined ? [] : distinctSpecialistRoutes(plan, session?.parentRoute);
+  if (mode !== undefined && specialists.length > 0) {
+    lines.push(proactiveGuidance(mode, specialists, '`subagent` with the matching route'));
   }
   lines.push('', 'Category routes:', ...formatCategoryTable(plan));
   return lines.join('\n');
@@ -190,15 +223,15 @@ export function buildTeamFallbackGuidance(policy: RoutingPolicyV2, session?: Ses
   const configured = plan.entries
     .filter(entry => entry.mode === 'explicit')
     .map(entry => entry.category);
-  const specialists = proactiveSpecialistCategories(plan, session);
   const lines = [
-    'Category routing is configured for this team. When starting a NEW teammate for a self-contained task in a configured category, prefer `team_route_delegate` over `subagent` so the configured model is used. Use `subagent` or `subagent_fork` when continuing with parent history or when the user explicitly requests native delegation.',
+    'Category routing is configured for this team. When starting a NEW teammate for a self-contained task in a configured category, prefer `team_route_delegate` over `subagent` without model selection so the configured model is used. Use `subagent` or `subagent_fork` when continuing with parent history or when the user explicitly requests native delegation.',
+    BRIDGE_GUIDANCE,
     `Configured categories: ${configured.join(', ')} (other categories inherit the Lead model).`,
   ];
-  if (specialists.length > 0) {
-    lines.push(
-      `Specialist-first delegation is enabled: for substantive self-contained tasks clearly matching a specialist category with a distinct configured model (${specialists.join(', ')}), proactively delegate via \`team_route_delegate\` and verify the result; handle simple Q&A and small edits directly.`,
-    );
+  const mode = proactiveMode(session);
+  const specialists = mode === undefined ? [] : distinctSpecialistRoutes(plan, session?.parentRoute);
+  if (mode !== undefined && specialists.length > 0) {
+    lines.push(proactiveGuidance(mode, specialists, 'a selectable host `subagent`, or `team_route_delegate` if unavailable'));
   }
   return lines.join('\n');
 }

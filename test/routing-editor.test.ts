@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import type { ModelAuthorizationForm } from '../src/ui/model-grants.ts';
+import { isAllowedModelArray, planModelGrant, type ModelAuthorizationForm } from '../src/ui/model-grants.ts';
 import { CATEGORY_IDS } from '../src/core/categories.ts';
 import { createDefaultRoutingPolicy } from '../src/core/routing-policy.ts';
 import { previewRecommendations } from '../src/core/recommendations.ts';
@@ -165,6 +165,18 @@ describe('routing form and draft helpers', () => {
 
 describe('Save synchronizes DSH authorization', () => {
   const route = { provider: 'openai', model: 'gpt-5-mini' };
+
+  it('rejects malformed allowedModels rows in the shared validator and grant plan', () => {
+    assert.equal(isAllowedModelArray([]), true);
+    assert.equal(isAllowedModelArray([route]), true);
+    for (const allowedModels of [null, {}, [null], [{ provider: 'openai' }], [{ provider: '', model: 'gpt-5-mini' }], [{ provider: 'openai', model: 0 }], new Array(1)]) {
+      assert.equal(isAllowedModelArray(allowedModels), false);
+      assert.deepEqual(planModelGrant([route], {
+        status: 'ready', writable: true, revision: 1,
+        value: { enabled: true, allowedModels: allowedModels as never },
+      }), { kind: 'unavailable', reason: 'invalid' });
+    }
+  });
   function configured() {
     const policy = routingFormPreview(legacy()).policy;
     policy.categories.deep = { mode: 'target', target: policy.defaultTarget };
@@ -221,6 +233,23 @@ describe('Save synchronizes DSH authorization', () => {
 });
 
 describe('revision-bound V2 editor', () => {
+  it('reports invalid history limits from Save as focusable field issues without mutating Host state', async () => {
+    const form = new FakeForm();
+    const editor = new RoutingEditor(form, form.grants);
+    for (const value of ['', '0', '1001']) {
+      editHistory(editor, value);
+      assert.equal(await editor.save(), false);
+      assert.deepEqual(editor.getSnapshot().issue, { section: 'default', field: 'historyLimit', reason: 'history' });
+      assert.equal(editor.getSnapshot().error, undefined);
+      assert.equal(editor.getSnapshot().draft?.historyLimit, value);
+    }
+    assert.equal(form.writes.length, 0);
+    assert.equal(form.grants.writes, 0);
+    editHistory(editor, '1000');
+    assert.equal(await editor.save(), true);
+    assert.equal(editor.getSnapshot().issue, undefined);
+    editor.dispose();
+  });
   it('selects a provider/model pair in one edit and does not carry effort between providers with the same model ID', async () => {
     const policy = createDefaultRoutingPolicy();
     policy.defaultTarget = { executor: 'native', model: { mode: 'explicit', provider: 'openai', id: 'gpt-5-mini', reasoningEffort: 'low' } };
@@ -468,14 +497,15 @@ describe('revision-bound V2 editor', () => {
     assert.equal(editor.getSnapshot().dirty, false);
 
     // Behavior-only save succeeds even without catalog loaded and writes only the changed behavior op(s).
-    editor.editBehavior({ delegationMode: 'specialist-first', enforceNativeSubagentRouting: true });
+    editor.editBehavior({ delegationMode: 'orchestrator', enforceNativeSubagentRouting: true });
     assert.equal(await editor.save({ catalogReady: false }), true);
     assert.equal(form.writes.length, 1);
     assert.deepEqual(form.writes[0]!.ops, [
-      { op: 'set', path: ['delegationMode'], value: 'specialist-first' },
+      { op: 'set', path: ['delegationMode'], value: 'orchestrator' },
       { op: 'set', path: ['enforceNativeSubagentRouting'], value: true },
     ]);
-    assert.equal(form.state.value?.delegationMode, 'specialist-first');
+    assert.equal(form.state.value?.delegationMode, 'orchestrator');
+    assert.equal(editor.getSnapshot().behavior.delegationMode, 'orchestrator');
     assert.equal(form.state.value?.enforceNativeSubagentRouting, true);
     assert.equal(editor.getSnapshot().dirty, false);
     assert.equal(editor.getSnapshot().notice, 'saved');

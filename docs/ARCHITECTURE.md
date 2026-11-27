@@ -1,16 +1,23 @@
 # 架构与宿主触点
 
-本插件的定位：**DSH 原生子智能体与 Agent Teams 的分类选模增强插件**，只负责「任务类别 → 模型」的选择。是否分工、子智能体生命周期、权限与授权仍由 DSH 原生负责。
+本插件是 **DSH 原生子智能体与 Agent Teams 的分类选模增强插件**，提供「任务类别 → 模型」路由和委派指引，但不自动发起委派；子智能体的生命周期、权限与授权仍由 DSH 原生负责。
 
-在 DSH Web（原生 `subagent` 工具默认开启 `modelSelection: true`）环境下，插件通过系统提示引导主助手直接给原生 `subagent` 传对应模型参数，**无需开启团队协作即可生效**；在未开启 `modelSelection` 的宿主环境下，不注入原生选模提示，团队模式下继续由 `team_route_delegate` 兜底。
+DSH Web 的宿主 `subagent` 默认启用 `modelSelection: true`，无需开启团队协作即可使用分类选模。没有可选模的宿主工具时，开启团队模式的 Lead 仍可用 `team_route_delegate` 兜底。
+
+## 委派提示与请求边界
+
+- `passive`（默认）仅显示系统路由表，不催促委派；`specialist-first` 主动委派实质专长任务；`orchestrator` 要求主助手编排、验收、汇总，将匹配的实质工作交给专长模型执行。两种主动模式都覆盖多轮跟进和方案确认后的实施，并服从用户明确要求直接处理的指示。
+- `team-router:policy` 注册于系统提示词后部（部署 persona 后缀前）。组装时优先使用本步 `modelSelection`，而不是上次请求模型。三元组 `(provider, model, reasoningEffort)` 完整对比；显式指定同一模型但省略推理强度表示采用该模型默认值，不继承主会话显式强度。
+- `agent/pre-step` 的首步是 `step === 1`。插件在下游允许进入后检查是否仍有真实用户消息；只在存活且已注册的 root、主动模式、指引开启、策略无需迁移且至少有一个不同的已授权专长路由时，向 `decision.messages` 末尾追加一个 `user` 角色的 `team-router:reminder`（`ContextFormed` 的 `instructions`）。工具后续步、自动续跑和子代理不注入；停用或卸载不回写已提交历史。
+- ACP 持久会话会把最后一条 assistant/tool 消息之后的 `user` 文本按序提交，因而不依赖适配器重新发送系统提示。提醒按 `provider`、`model` 参数描述所需的宿主 `subagent`，不绑定桥接命名或特定适配器。
 
 ## 分层
 
 ```text
 src/
-├─ index.ts          Cordis 入口，仅 re-export adapter/dsh/runtime
-├─ core/             与宿主无关：类别、V2 策略、旧策略迁移、推荐、委派与原生 subagent 路由/校验、审计存储
-├─ adapter/dsh/      DSH 运行时接线：团队识别、授权、配置校验、系统提示与 pre-execute 钩子、子智能体启动、工具注册
+├─ index.ts          Cordis 入口：导出 adapter/dsh/runtime 及公共委派模式类型/常量
+├─ core/             与宿主无关：类别、V2 策略、旧策略迁移、推荐、委派、路由提示渲染与校验、审计存储
+├─ adapter/dsh/      DSH 运行时接线：团队识别、授权、配置校验、系统提示、pre-step 与 pre-execute 钩子、子智能体启动、工具注册
 └─ ui/               设置页（DSH Web 客户端插件）及其纯状态逻辑
 ```
 
@@ -39,8 +46,9 @@ src/
 | T9 | `agent/created`、`subagent/start`、`agent/disposed`、`session/event` 事件与工具注册 | runtime.ts | 🟢 | 上游提案 §2 可删掉专用委派工具 |
 | T10 | `session.requestHeader().config`，用于报告实际模型 | runtime.ts | 🟡 | — |
 | T11 | 客户端：`configForms` 中的 `subagent-model-selection-settings` 表单、`plugins.bundle.config`/`settings.section` 插槽、`remote.pluginManager`/`remote.settings` | [client.tsx](<../src/ui/client.tsx>)、[model-grants.ts](<../src/ui/model-grants.ts>) | 🟡 | 上游提案 §1 后可只读 |
-| T12 | 可选依赖 `systemPrompt.section`（`order: getSectionOrder('TEAM_POLICY') + 1`、`interpolate: false`）、`tools.get('subagent', agent)` 检查原生选模参数 | runtime.ts | 🟡 | 上游提案 §2 后可简化 |
+| T12 | 可选依赖 `systemPrompt.section`（`DEPLOYMENT_PERSONA_SUFFIX` 前一位，有限数值检查，失败回退 `10199`；`interpolate: false`），组装回调的 `modelSelection` 与 `tools.get('subagent', agent)` 选模检查 | runtime.ts | 🟡 | 上游提案 §2 后可简化 |
 | T13 | `tools/pre-execute` 瀑布钩子（仅在 `enforceNativeSubagentRouting: true` 时拒绝不匹配的原生 `subagent` 调用） | runtime.ts | 🟢 | 上游提案 §2 后可删除 |
+| T14 | `agent/pre-step` 瀑布钩子与 `MessageSourceMap` 扩展，用于追加首步提醒；依赖宿主的 1-based step 和本步模型选择 | runtime.ts | 🟡 | — |
 
 🔴 项是升级时最容易「静默失效」的地方，每次加入新宿主版本都应优先人工核对。
 

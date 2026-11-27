@@ -10,7 +10,7 @@ import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent';
 import { AgentLoop } from '@deepseek-ai/dsh-agent-loop';
 import { TeamService } from '@deepseek-ai/dsh-agent-team';
 import * as localFs from '@deepseek-ai/dsh-fs-local';
-import { LlmAdapter, LlmRuntime, ReasoningEffortId, createUserMessage } from '@deepseek-ai/dsh-llm';
+import { LlmAdapter, LlmRuntime, ReasoningEffortId, ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { ContentBlock, GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm';
 import { SessionId, SessionStore } from '@deepseek-ai/dsh-session';
 import * as jsonl from '@deepseek-ai/dsh-session-persistence-jsonl';
@@ -71,6 +71,13 @@ export const config = (): RouterConfig => ({
 export class OfflineAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = [];
   private readonly gates: Array<ReturnType<typeof this.makeGate>> = [];
+  private nextToolCall?: { name: string; args: string };
+
+  /** Exercise the native tool loop once, then return normal completions. */
+  callToolOnNextRequest(name: string, args: Record<string, unknown> = {}) {
+    assert.equal(this.nextToolCall, undefined);
+    this.nextToolCall = { name, args: JSON.stringify(args) };
+  }
 
   override async listModels(provider: string) {
     return ['strong', 'fast', 'review'].map((id) => ({ provider, id, name: `Offline ${id}`, inputModalities: ['text' as const] }));
@@ -104,6 +111,8 @@ export class OfflineAdapter extends LlmAdapter {
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     options.signal?.throwIfAborted();
     this.requests.push(options);
+    const toolCall = this.nextToolCall;
+    this.nextToolCall = undefined;
     const gate = this.gates.shift();
     if (gate !== undefined) {
       gate.started.resolve(options);
@@ -114,6 +123,15 @@ export class OfflineAdapter extends LlmAdapter {
       finally { options.signal?.removeEventListener('abort', onAbort); }
     }
     options.signal?.throwIfAborted();
+    if (toolCall !== undefined) {
+      const { name, args } = toolCall;
+      const id = ToolCallId(`offline-tool-call-${this.requests.length}`);
+      yield { type: 'block-start', index: 0, blockType: 'tool-call' };
+      yield { type: 'tool-call-delta', index: 0, id, name, argumentsDelta: args };
+      yield { type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: args } };
+      yield { type: 'finish', reason: { kind: 'tool-calls' } };
+      return;
+    }
     yield { type: 'block-start', index: 0, blockType: 'text' };
     yield { type: 'text-delta', index: 0, text: 'Offline completion.' };
     yield { type: 'block-end', index: 0, block: { type: 'text', text: 'Offline completion.' } };

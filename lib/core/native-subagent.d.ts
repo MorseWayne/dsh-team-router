@@ -1,6 +1,7 @@
 import type { CategoryId } from './categories.ts';
 import type { RoutingPolicyV2 } from './routing-policy.ts';
-export type DelegationMode = 'passive' | 'specialist-first';
+export declare const DELEGATION_MODES: readonly ["passive", "specialist-first", "orchestrator"];
+export type DelegationMode = typeof DELEGATION_MODES[number];
 export declare function isDelegationMode(value: unknown): value is DelegationMode;
 export interface RoutePair {
     readonly provider: string;
@@ -28,8 +29,8 @@ export interface SessionRouteContext {
      */
     readonly delegationMode?: DelegationMode;
     /**
-     * Only root (top-level) agents receive proactive delegation guidance; child
-     * subagents stay passive to prevent recursive delegation loops. Defaults to `true`.
+     * Only confirmed root (top-level) agents receive proactive delegation guidance;
+     * child subagents stay passive to prevent recursive delegation loops.
      */
     readonly isRoot?: boolean;
 }
@@ -50,10 +51,18 @@ export type SubagentValidationResult = {
     readonly reason: string;
 };
 /**
+ * Only genuine specialist deliverables participate in proactive delegation.
+ * `quick` and `unspecified` stay passive so small requests and general Q&A
+ * are never unnecessarily offloaded to a subagent.
+ */
+export declare const PROACTIVE_SPECIALIST_CATEGORIES: ReadonlySet<CategoryId>;
+/**
  * Resolve all seven categories against a V2 policy into an actionable native
  * `subagent` routing plan, taking optional Session authorization into account.
  */
 export declare function buildNativeRoutingPlan(policy: RoutingPolicyV2, session?: SessionRouteContext): NativeRoutingPlan;
+/** Compact, turn-local policy. The host decides when and how to attach it. */
+export declare function buildNativeSubagentReminder(policy: RoutingPolicyV2, session: SessionRouteContext): string;
 /**
  * System prompt section for agents whose native `subagent` tool exposes
  * `provider` / `model` selection. Returns an empty string when no category

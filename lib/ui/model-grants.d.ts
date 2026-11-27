@@ -31,6 +31,7 @@ export declare function requiredModelRoutes(policy: {
     categories: Partial<Record<string, CategoryBinding>>;
 }): Route[];
 export type GrantProblem = 'loading' | 'unserved' | 'invalid' | 'readOnly';
+export declare function isAllowedModelArray(value: unknown): value is Route[];
 type GrantPlan = {
     kind: 'complete' | 'readOnly';
 } | {

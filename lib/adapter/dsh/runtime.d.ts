@@ -1,4 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis';
+import type { ContextFormed } from '@deepseek-ai/dsh-llm';
 import { NativeTeams } from './native-team.ts';
 import { Config } from './config.ts';
 import { ExecutionStore } from '../../core/execution-store.ts';
@@ -6,6 +7,14 @@ export { Config } from './config.ts';
 export { EXTERNAL_GATES } from '../../core/delegation.ts';
 export declare const name = "team-router";
 export declare const inject: string[];
+declare const REMINDER_SOURCE = "team-router:reminder";
+declare module '@deepseek-ai/dsh-llm' {
+    interface MessageSourceMap {
+        [REMINDER_SOURCE]: {
+            kind: typeof REMINDER_SOURCE;
+        } & ContextFormed;
+    }
+}
 export declare class TeamRouter {
     readonly teams: NativeTeams;
     readonly store: ExecutionStore;
@@ -21,6 +30,8 @@ export declare class TeamRouter {
     private delegate;
     private install;
     private release;
+    private isLiveRoot;
+    private guidanceState;
     private renderPromptGuidance;
     start(): Promise<void>;
     stop(): void;

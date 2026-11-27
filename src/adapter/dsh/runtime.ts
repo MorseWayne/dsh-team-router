@@ -1,13 +1,14 @@
 /**
  * DSH host adapter: the ONLY place that wires routing onto DSH runtime services.
- * Every host touchpoint used here is inventoried in docs/ARCHITECTURE.md (T1–T13).
+ * Every host touchpoint used here is inventoried in docs/ARCHITECTURE.md (T1–T14).
  * Host-agnostic rules (validation, prompts, outcome mapping) live in core/.
  */
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Context } from '@deepseek-ai/cordis';
-import type { Agent, AgentOptions } from '@deepseek-ai/dsh-agent';
-import { ReasoningEffortId } from '@deepseek-ai/dsh-llm';
+import type { Agent, AgentOptions, ModelSelection } from '@deepseek-ai/dsh-agent';
+import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm';
+import type { ContextFormed, ToolSchema } from '@deepseek-ai/dsh-llm';
 import type {} from '@deepseek-ai/dsh-session-projection';
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection';
 import { parentAgentOptionsForDelegation } from '@deepseek-ai/dsh-subagent';
@@ -15,13 +16,12 @@ import type { SubagentActivation } from '@deepseek-ai/dsh-subagent';
 import type {} from '@deepseek-ai/dsh-settings';
 import type {} from '@deepseek-ai/dsh-system-prompt';
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import type { ToolSchema } from '@deepseek-ai/dsh-llm';
 import { NativeTeams } from './native-team.ts';
 import { Config, installConfigValidation, readRoutingState, requireRoutingPolicy } from './config.ts';
 import { CATEGORY_IDS, categorySelectionGuidance } from '../../core/categories.ts';
 import { DIAGNOSTICS, EXTERNAL_GATES, buildCategoryPrompt, outcomeState, validateDelegateArgs } from '../../core/delegation.ts';
 import type { DelegateArgs } from '../../core/delegation.ts';
-import { buildNativeSubagentGuidance, buildTeamFallbackGuidance, validateNativeSubagentCall } from '../../core/native-subagent.ts';
+import { buildNativeSubagentGuidance, buildNativeSubagentReminder, buildTeamFallbackGuidance, validateNativeSubagentCall } from '../../core/native-subagent.ts';
 import { resolveRoutingSnapshot } from '../../core/routing-policy.ts';
 import { authorizationProjection, assertAuthorizedRoute } from './authorization.ts';
 import type { AuthorizedRoute } from './authorization.ts';
@@ -33,7 +33,16 @@ export const name = 'team-router';
 export const inject = ['agents', 'agentTeams', 'subagents', 'tools', 'llm', 'sessionProjections'];
 
 const NATIVE_SUBAGENT_TOOL = 'subagent';
-const FALLBACK_SECTION_ORDER = 601;
+const REMINDER_SOURCE = 'team-router:reminder';
+// Just before the deployment persona suffix on the supported host; use the
+// same late placement if the host cannot look up its suffix order.
+const FALLBACK_SECTION_ORDER = 10_199;
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    [REMINDER_SOURCE]: { kind: typeof REMINDER_SOURCE } & ContextFormed;
+  }
+}
 
 function toolSupportsModelSelection(definition: Pick<ToolSchema, 'parameters'> | undefined): boolean {
   const properties = definition?.parameters?.properties;
@@ -234,26 +243,36 @@ export class TeamRouter {
     for (const dispose of this.registrations.get(agent) ?? []) dispose();
     this.registrations.delete(agent);
   }
-  private renderPromptGuidance(agent: Agent | undefined): string {
-    if (this.stopped || agent === undefined || this.ctx.agents.get(agent.id) !== agent) return '';
-    if (!this.configuration.nativeSubagentGuidance.get()) return '';
-    let state: ReturnType<typeof readRoutingState>;
-    try { state = readRoutingState(this.configuration); }
-    catch { return ''; }
-    if (state.migrationRequired) return '';
-    let authorizedRoutes: AuthorizedRoute[] | null;
-    try { authorizedRoutes = this.authorization.stateOf(agent.session); }
-    catch { return ''; }
-    const parentRoute = parentAgentOptionsForDelegation(agent);
-    const delegationMode = this.configuration.delegationMode.get();
-    let isRoot = agent.session.header.origin !== 'subagent';
-    try { isRoot = isRoot && this.ctx.subagents.rootOf(agent) === agent; }
-    catch { /* keep session header check */ }
+  private isLiveRoot(agent: Agent): boolean {
+    if (this.ctx.agents.get(agent.id) !== agent || agent.session.header.origin === 'subagent') return false;
+    try { return this.ctx.subagents.rootOf(agent) === agent; }
+    catch { return false; }
+  }
+  private guidanceState(agent: Agent) {
+    try {
+      const state = readRoutingState(this.configuration);
+      if (!state.migrationRequired) {
+        return { policy: state.policy, authorizedRoutes: this.authorization.stateOf(agent.session) };
+      }
+    } catch { /* Invalid policy or unavailable authorization; don't advertise routes. */ }
+    return undefined;
+  }
+  private renderPromptGuidance(agent: Agent | undefined, modelSelection: Readonly<ModelSelection> | undefined): string {
+    if (this.stopped || !this.configuration.nativeSubagentGuidance.get()) return '';
+    if (agent === undefined || this.ctx.agents.get(agent.id) !== agent) return '';
+    const state = this.guidanceState(agent);
+    if (state === undefined) return '';
+    const session = {
+      authorizedRoutes: state.authorizedRoutes,
+      parentRoute: modelSelection ?? agent.model?.current() ?? parentAgentOptionsForDelegation(agent),
+      delegationMode: this.configuration.delegationMode.get(),
+      isRoot: this.isLiveRoot(agent),
+    };
     if (toolSupportsModelSelection(this.ctx.tools.get(NATIVE_SUBAGENT_TOOL, agent))) {
-      return buildNativeSubagentGuidance(state.policy, { authorizedRoutes, parentRoute, delegationMode, isRoot });
+      return buildNativeSubagentGuidance(state.policy, session);
     }
-    if (this.teams.tryMembership(agent)?.role === 'lead') {
-      return buildTeamFallbackGuidance(state.policy, { authorizedRoutes, parentRoute, delegationMode, isRoot: true });
+    if (session.isRoot && this.teams.tryMembership(agent)?.role === 'lead') {
+      return buildTeamFallbackGuidance(state.policy, session);
     }
     return '';
   }
@@ -261,14 +280,39 @@ export class TeamRouter {
     this.authorization = await this.ctx.sessionProjections.register(authorizationProjection);
     this.ctx.inject(['systemPrompt'], child => {
       let order = FALLBACK_SECTION_ORDER;
-      try { order = child.systemPrompt.getSectionOrder('TEAM_POLICY') + 1; }
-      catch { order = FALLBACK_SECTION_ORDER; }
+      try {
+        const suffixOrder = child.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_SUFFIX');
+        if (Number.isFinite(suffixOrder)) order = suffixOrder - 1;
+      } catch { /* Older hosts may not expose getSectionOrder. */ }
       child.effect(() => child.systemPrompt.section({
         name: 'team-router:policy',
         order,
         interpolate: false,
-        text: ({ agent }) => this.renderPromptGuidance(agent),
+        text: ({ agent, modelSelection }) => this.renderPromptGuidance(agent, modelSelection),
       }), 'teamRouter.systemPrompt');
+    });
+    this.ctx.on('agent/pre-step', async ({ agent, step, messages, signal, modelSelection }, next) => {
+      // The host starts each turn at step 1. Only a new human input (not a
+      // retry, subagent result, or synthetic context) should gain a reminder.
+      if (step !== 1 || !messages.some(message => message.source.kind === 'user')) return next();
+      const decision = await next();
+      if (decision.kind !== 'enter' || signal.aborted || this.stopped
+        || !this.configuration.nativeSubagentGuidance.get() || !this.isLiveRoot(agent)
+        || !decision.messages.some(message => message.source.kind === 'user')) return decision;
+      const delegationMode = this.configuration.delegationMode.get();
+      if (delegationMode !== 'specialist-first' && delegationMode !== 'orchestrator') return decision;
+      const state = this.guidanceState(agent);
+      if (state === undefined) return decision;
+      // Do not gate on the unnamespaced tool's presence: a provider bridge
+      // can expose the model-selecting host tool under its own namespace.
+      const text = buildNativeSubagentReminder(state.policy, {
+        authorizedRoutes: state.authorizedRoutes, parentRoute: modelSelection, delegationMode, isRoot: true,
+      });
+      if (text === '') return decision;
+      const reminder = createUserMessage({
+        content: [{ type: 'text', text }], source: { kind: REMINDER_SOURCE, form: 'instructions' },
+      });
+      return { ...decision, messages: [...decision.messages, reminder] };
     });
     this.ctx.on('tools/pre-execute', (exec, next) => {
       if (this.stopped || exec.name !== NATIVE_SUBAGENT_TOOL || !this.configuration.enforceNativeSubagentRouting.get()) return next();

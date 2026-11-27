@@ -25,8 +25,8 @@ const en: typeof zh = {
   conflict: (v, runtime) => `Codex subagent ${v} is incompatible with DSH ${runtime}.`, update: v => `Update it to ${v} in Plugins, then return and retry. The Codex subagent itself may remain disabled.`, noTarget: 'Check Plugins for a compatible update.',
   retry: 'Check again', open: 'View plugin', copy: 'Copy diagnostics', copied: 'Copied', manual: 'Copy the text below manually.', details: 'Diagnostics', leave: 'Leaving this page discards unsaved edits.',
 };
-export function GrantDiagnostics({ problem, locale, inventory, recheck, openBundle, dirty }: {
-  problem: GrantProblem; locale: string; inventory(): InventoryReader | undefined; recheck(): Promise<'available' | 'unchanged' | 'unknown'>;
+export const GrantDiagnostics = React.memo(function GrantDiagnostics({ id, problem, locale, inventory, recheck, openBundle, dirty }: {
+  id: string; problem: GrantProblem; locale: string; inventory(): InventoryReader | undefined; recheck(): Promise<'available' | 'unchanged' | 'unknown'>;
   openBundle?: ((name: string) => void) | undefined; dirty: boolean;
 }) {
   const t = locale === 'zh' ? zh : en;
@@ -44,8 +44,8 @@ export function GrantDiagnostics({ problem, locale, inventory, recheck, openBund
   }, [attempt, problem, inventory, recheck]);
   const conflict = evidence?.conflict;
   const report = JSON.stringify({ component: MODEL_AUTHORIZATION_ENTRY, settings: problem, ...evidence && {status: evidence.component}, ...conflict && {conflict} }, null, 2);
-  return <section className="dtr-note" aria-label={t.details}>
-    <p role="status">{t[problem]}</p>
+  return <section id={id} tabIndex={-1} className="dtr-card dtr-note dtr-diagnostics" aria-labelledby={`${id}-summary`}>
+    <p id={`${id}-summary`} role="status"><strong>{t[problem]}</strong></p>
     {problem === 'unserved' && <p>{!evidence ? t.checking : conflict && evidence.component === 'disabled' ? (locale === 'zh' ? '子智能体模型授权组件未启用。' : 'Subagent model authorization is disabled.') : t[evidence.component]}</p>}
     {conflict && <p>{t.conflict(conflict.installed, conflict.runtime)} {conflict.offered ? t.update(conflict.offered) : t.noTarget}</p>}
     {probe && <p role="status">{locale === 'zh' ? ({available: 'DSH 已能提供授权设置。若保存仍不可用，请记下未保存的修改，再刷新页面。', unchanged: '已重新检测，授权设置仍未就绪或不可写。', unknown: '无法从 DSH 获取最新状态。请确认连接后重试。'})[probe] : ({available: 'DSH now serves authorization settings. If Save remains unavailable, note your unsaved edits before refreshing the page.', unchanged: 'Checked again: the settings are still unavailable or read-only.', unknown: 'Could not reach DSH for a fresh status. Check the connection and retry.'})[probe]}</p>}
@@ -58,6 +58,6 @@ export function GrantDiagnostics({ problem, locale, inventory, recheck, openBund
     </div>
     {dirty && conflict && openBundle && <p className="dtr-muted">{t.leave}</p>}
     {copy && <p role="status">{t[copy]}</p>}
-    {problem !== 'loading' && <details key={copy === 'manual' ? 'manual' : 'details'} open={copy === 'manual' || undefined}><summary>{t.details}</summary><pre style={{whiteSpace:'pre-wrap', overflowWrap:'anywhere'}}>{report}</pre></details>}
+    {problem !== 'loading' && <details key={copy === 'manual' ? 'manual' : 'details'} open={copy === 'manual' || undefined}><summary>{t.details}</summary><pre>{report}</pre></details>}
   </section>;
-}
+});

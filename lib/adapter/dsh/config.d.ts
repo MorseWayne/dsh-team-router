@@ -28,10 +28,10 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     roles: Schema<NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, "volatile-defined">;
     defaultRoute: Schema<string | null, string | null, "volatile">;
     historyLimit: Schema<number, number, "volatile-defined">;
-    /** Inject task-category routing guidance into the system prompt (default on). */
+    /** Show task-category system guidance and, in proactive modes, per-turn reminders (default on). */
     nativeSubagentGuidance: Schema<boolean, boolean, "volatile-defined">;
-    /** Whether the root agent passively routes delegations or proactively delegates distinct specialist tasks. */
-    delegationMode: Schema<"passive" | "specialist-first", "passive" | "specialist-first", "volatile-defined">;
+    /** Choose passive routing, specialist-first delegation, or orchestrator delegation at the root. */
+    delegationMode: Schema<"passive" | "specialist-first" | "orchestrator", "passive" | "specialist-first" | "orchestrator", "volatile-defined">;
     /** Deny native `subagent` calls that do not match a configured category route (default off). */
     enforceNativeSubagentRouting: Schema<boolean, boolean, "volatile-defined">;
     stateDir: Schema<string, string, "plain">;
@@ -60,10 +60,10 @@ export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     roles: Schema<NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, NoInfer<import("@deepseek-ai/cosmokit").Dict<string, string>>, "volatile-defined">;
     defaultRoute: Schema<string | null, string | null, "volatile">;
     historyLimit: Schema<number, number, "volatile-defined">;
-    /** Inject task-category routing guidance into the system prompt (default on). */
+    /** Show task-category system guidance and, in proactive modes, per-turn reminders (default on). */
     nativeSubagentGuidance: Schema<boolean, boolean, "volatile-defined">;
-    /** Whether the root agent passively routes delegations or proactively delegates distinct specialist tasks. */
-    delegationMode: Schema<"passive" | "specialist-first", "passive" | "specialist-first", "volatile-defined">;
+    /** Choose passive routing, specialist-first delegation, or orchestrator delegation at the root. */
+    delegationMode: Schema<"passive" | "specialist-first" | "orchestrator", "passive" | "specialist-first" | "orchestrator", "volatile-defined">;
     /** Deny native `subagent` calls that do not match a configured category route (default off). */
     enforceNativeSubagentRouting: Schema<boolean, boolean, "volatile-defined">;
     stateDir: Schema<string, string, "plain">;

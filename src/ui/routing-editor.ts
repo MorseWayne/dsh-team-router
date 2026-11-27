@@ -114,15 +114,21 @@ export function routingPolicyMutations(input: unknown): RoutingMutation[] {
   return [{ op: 'set', path: ['policyV2'], value: parseRoutingPolicy(input) }];
 }
 
+function historyLimitIssue(draft: RoutingDraft): RoutingValidationIssue | undefined {
+  const history = Number(draft.historyLimit);
+  if (draft.historyLimit.trim() === '' || !Number.isInteger(history) || history < 1 || history > 1000) {
+    return { section: 'default', field: 'historyLimit', reason: 'history' };
+  }
+  return undefined;
+}
+
 export function routingDraftIssue(
   draft: RoutingDraft,
   catalog?: ModelCatalog,
   catalogReady = catalog !== undefined,
 ): RoutingValidationIssue | undefined {
-  const history = Number(draft.historyLimit);
-  if (draft.historyLimit.trim() === '' || !Number.isInteger(history) || history < 1 || history > 1000) {
-    return { section: 'default', field: 'historyLimit', reason: 'history' };
-  }
+  const historyIssue = historyLimitIssue(draft);
+  if (historyIssue) return historyIssue;
   const targets: Array<{ section: RoutingSection; target: Target }> = [{ section: 'default', target: draft.defaultTarget }];
   for (const id of CATEGORY_IDS) {
     const entry = draft.categories[id];
@@ -314,6 +320,12 @@ export class RoutingEditor {
     }
     if (state.behavior.enforceNativeSubagentRouting !== this.savedBehavior.enforceNativeSubagentRouting) {
       behaviorOps.push({ op: 'set', path: ['enforceNativeSubagentRouting'], value: state.behavior.enforceNativeSubagentRouting });
+    }
+    // Invalid input must point to the field before structural parsing can throw.
+    const historyIssue = historyLimitIssue(state.draft);
+    if (historyIssue) {
+      this.publish({ ...state, issue: historyIssue, error: undefined, notice: undefined });
+      return false;
     }
     let parsedPolicy: RoutingPolicyV2;
     try { parsedPolicy = routingDraftToPolicy(state.draft); }

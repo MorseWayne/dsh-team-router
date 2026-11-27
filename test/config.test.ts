@@ -4,6 +4,7 @@ import { Context } from '@deepseek-ai/cordis';
 import Schema from '@deepseek-ai/schemastery';
 import { Config, installConfigValidation, readPolicy, resolvePolicy } from '../src/adapter/dsh/config.ts';
 import { parseConfig } from '../src/core/policy.ts';
+import { DELEGATION_MODES, isDelegationMode } from '../src/index.ts';
 
 const route = { provider: 'offline', model: 'fast' };
 const fixture = () => ({
@@ -61,6 +62,18 @@ describe('native configuration contract', () => {
     assert.equal(roundTrip.type, 'object');
     assert.equal(roundTrip.dict!.routes!.type, 'dict');
     assert.equal(roundTrip.dict!.rules!.type, 'array');
+  });
+
+  it('accepts exactly the three exported delegation modes and round-trips them via the Settings schema', () => {
+    assert.deepEqual(DELEGATION_MODES, ['passive', 'specialist-first', 'orchestrator']);
+    const wireSchema = new Schema(Config.toJSON());
+    for (const mode of DELEGATION_MODES) {
+      assert.equal(isDelegationMode(mode), true);
+      assert.equal(Config({ delegationMode: mode }).delegationMode.get(), mode);
+      assert.equal(wireSchema({ delegationMode: mode }).delegationMode.get(), mode);
+    }
+    assert.equal(isDelegationMode('aggressive'), false);
+    assert.equal(isDelegationMode(undefined), false);
   });
 
   it('enforces shape bounds and unsafe dictionary keys', () => {

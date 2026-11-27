@@ -28,13 +28,21 @@ export function requiredModelRoutes(policy: { defaultTarget: Target; categories:
 }
 
 export type GrantProblem = 'loading' | 'unserved' | 'invalid' | 'readOnly';
+
+export function isAllowedModelArray(value: unknown): value is Route[] {
+  if (!Array.isArray(value)) return false;
+  for (const row of value) {
+    if (typeof row?.provider !== 'string' || !row.provider.length || typeof row.model !== 'string' || !row.model.length) return false;
+  }
+  return true;
+}
+
 type GrantPlan = { kind: 'complete' | 'readOnly' } | { kind: 'unavailable'; reason: Exclude<GrantProblem, 'readOnly'> } | { kind: 'write'; revision: number; routes: Route[] };
 export function planModelGrant(required: Route[], snapshot: ReturnType<ModelAuthorizationForm['getSnapshot']>): GrantPlan {
   if (!required.length) return { kind: 'complete' };
   const { value, revision } = snapshot;
   if (snapshot.status !== 'ready') return { kind: 'unavailable', reason: snapshot.status === 'loading' ? 'loading' : 'unserved' };
-  if (!Number.isSafeInteger(revision) || revision === undefined || typeof value?.enabled !== 'boolean' || !Array.isArray(value.allowedModels)
-    || !value.allowedModels.every(row => typeof row?.provider === 'string' && row.provider.length && typeof row.model === 'string' && row.model.length)) {
+  if (!Number.isSafeInteger(revision) || revision === undefined || typeof value?.enabled !== 'boolean' || !isAllowedModelArray(value.allowedModels)) {
     return { kind: 'unavailable', reason: 'invalid' };
   }
   const existing = new Set(value.allowedModels.map(key));
