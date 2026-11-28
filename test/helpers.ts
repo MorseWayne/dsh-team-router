@@ -60,6 +60,8 @@ export const route = (model: string, reasoningEffort?: string) => ({
 /** Only the LLM transport is synthetic: all sessions, Agents, Teams and hooks are native. */
 export class OfflineAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = [];
+  /** Live capabilities: changing these does not replace the registered adapter. */
+  readonly efforts = new Map<string, readonly string[]>();
   private readonly gates: Array<ReturnType<typeof this.makeGate>> = [];
   private nextToolCall?: { name: string; args: string };
 
@@ -78,7 +80,7 @@ export class OfflineAdapter extends LlmAdapter {
     const found = (await this.listModels(provider)).find((entry) => entry.id === model);
     assert.ok(found, `Unexpected offline model lookup: ${model}`);
     return { ...found, context: { contextWindow: 65536 }, reasoning: {
-      efforts: [{ id: ReasoningEffortId('low'), name: 'Low' }, { id: ReasoningEffortId('high'), name: 'High' }],
+      efforts: (this.efforts.get(model) ?? ['low', 'high']).map(id => ({ id: ReasoningEffortId(id), name: id })),
     } };
   }
 

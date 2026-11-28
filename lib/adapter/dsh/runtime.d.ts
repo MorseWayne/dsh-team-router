@@ -30,6 +30,7 @@ export declare class TeamRouter {
     private install;
     private release;
     private isLiveRoot;
+    private sessionAuthorization;
     private guidanceState;
     private renderPromptGuidance;
     start(): Promise<void>;

@@ -16,7 +16,7 @@ export interface ModelCatalog {
 export interface RecommendationCandidate { readonly provider: string; readonly model: string; readonly preferredEffort?: string }
 
 /** Curated exact IDs, not benchmark rankings or promises of availability or authorization. */
-export const RECOMMENDATION_VERSION = '2026-11-27.2';
+export const RECOMMENDATION_VERSION = '2026-11-28.1';
 const candidate = (provider: string, model: string, preferredEffort?: string): RecommendationCandidate =>
   Object.freeze({ provider, model, ...(preferredEffort === undefined ? {} : { preferredEffort }) });
 const sonnet = candidate('anthropic', 'claude-sonnet-4-5');
@@ -34,11 +34,12 @@ const agyOpus = candidate('antigravity', 'claude-opus-5-5');
 const agySonnet = candidate('antigravity', 'claude-sonnet-5-5');
 const agyFlash = candidate('antigravity', 'gemini-3.8-flash');
 
-const fastModels = Object.freeze([subscriptionMini, agyFlash, chat, mini, geminiFlash,
+const fastLeaders = [subscriptionMini, agyFlash, chat] as const;
+const fastAlternates = [mini, geminiFlash,
   candidate('antigravity-acp', 'gemini-4-hydrogen', 'low'), candidate('openai-codex', 'gpt-6.2-sol', 'low'),
   candidate('antigravity-acp', 'gemini-4-neon', 'low'), candidate('openai-codex', 'gpt-6.2-astra', 'low'),
   candidate(astra.provider, astra.model, 'low'), candidate(codex.provider, codex.model, 'low'),
-]);
+] as const;
 
 export const RECOMMENDATION_CANDIDATES: Readonly<Record<BuiltinId, readonly RecommendationCandidate[]>> = Object.freeze({
   'visual-engineering': Object.freeze([argon, agyOpus, astra, geminiPro, sonnet, codex]),
@@ -51,8 +52,8 @@ export const RECOMMENDATION_CANDIDATES: Readonly<Record<BuiltinId, readonly Reco
   ultrabrain: Object.freeze([astra, agyOpus, reasoner, opus, geminiPro]),
   artistry: Object.freeze([agyOpus, argon, astra, opus, geminiPro, sonnet]),
   writing: Object.freeze([agySonnet, astra, chat, sonnet, argon, geminiPro]),
-  scout: fastModels,
-  quick: fastModels,
+  scout: Object.freeze([...fastLeaders, candidate('antigravity-acp', 'gemini-3.8-flash', 'low'), ...fastAlternates]),
+  quick: Object.freeze([...fastLeaders, ...fastAlternates]),
   unspecified: Object.freeze([agySonnet, subscriptionMini, chat, sonnet, geminiFlash]),
 });
 

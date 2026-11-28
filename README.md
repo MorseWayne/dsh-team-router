@@ -3,7 +3,7 @@
 <img src="docs/images/hero-banner.svg" alt="dsh-team-router — 让最拿手的模型，干最擅长的活" width="100%" />
 
 <p>
-  <a href="https://www.npmjs.com/package/dsh-team-router"><img src="https://img.shields.io/badge/version-1.1.0-547DAE?style=flat-square" alt="Version 1.1.0" /></a>
+  <a href="https://www.npmjs.com/package/dsh-team-router"><img src="https://img.shields.io/badge/version-1.1.1-547DAE?style=flat-square" alt="Version 1.1.1" /></a>
   <img src="https://img.shields.io/badge/DSH-0.2.2--rc.3%20%7C%20rc.4%20%7C%20rc.5-3B8276?style=flat-square" alt="DSH Compatibility" />
   <img src="https://img.shields.io/badge/Node.js-%3E%3D24-6E9B90?style=flat-square" alt="Node.js >=24" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-7889B6?style=flat-square" alt="MIT License" /></a>
@@ -52,13 +52,13 @@
 ### 第 1 步：安装插件
 
 **DSH Web（推荐）**
-1. 打开 **插件 → 添加插件**，输入 `dsh-team-router@1.1.0`，点击安装并启用。
+1. 打开 **插件 → 添加插件**，输入 `dsh-team-router@1.1.1`，点击安装并启用。
 2. 刷新页面（若提示需要重启，先重启 DSH）。
 
 **命令行安装**（以下以 `web` profile 为例，使用其他 profile 请替换名称）：
 
 ```bash
-dsh plugin --profile web add dsh-team-router@1.1.0
+dsh plugin --profile web add dsh-team-router@1.1.1
 ```
 
 > **如何确认装好了？** 打开同一 profile 的 **插件 → 团队任务路由**，应看到 4 个内置工作组（13 个内置类别）和「自定义类别」区。
@@ -83,7 +83,7 @@ dsh plugin --profile web add dsh-team-router@1.1.0
 > [!IMPORTANT]
 > **1.0.0 破坏性更新（Breaking Change）与兼容范围**
 > - **已有 V3 无需迁移**：旧配置没有显式启用 `scout` 就保持停用；精简 7 类和严格校验行为不变。新安装未配置 `routing` 时启用全部 13 类，仍继承主模型、被动路由、关闭严格校验。
-> - 同一个 `dsh-team-router@1.1.0` 安装包兼容 DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**（需要 **Node.js 24+**），无需开启版本豁免。
+> - 同一个 `dsh-team-router@1.1.1` 安装包兼容 DSH **`0.2.2-rc.3`、`0.2.2-rc.4`、`0.2.2-rc.5`**（需要 **Node.js 24+**），无需开启版本豁免。
 > - 配置已升级为单一的 `routing`（V3）结构，**不再读取或迁移旧版 V1/V2 配置**，并移除旧版 `./policy` 导出、`team_route_set`/`team_route_reset` 及未开放的外部执行器占位字段。升级后在设置页重新点选保存即可；旧版执行历史目录不会被扫描、改写或删除。
 
 > [!NOTE]
@@ -102,6 +102,7 @@ dsh plugin --profile web add dsh-team-router@1.1.0
 - **DSH Web 原生直通**：官方预设默认开启原生 `subagent` 选模能力，无需开启团队协作即可跨厂商分工；混合任务默认由最关键的单一专长模型端到端完成，只在接口明确、可独立验收时拆单。
 - **同模合并省上下文**：在主动模式的每轮首步提醒中，插件会按完整的 `(provider, model, reasoningEffort)` 三元组自动合并同配置的类别，既不刷屏，也绝不混并不同推理强度；工具循环后续步与子代理不会重复注入。
 - **可选严格校验（`strict: true`）**：拦截不匹配活跃路由表的原生 `subagent` 调用并引导主助手重填。当所有启用类别都为继承时，也会阻止私传显式模型；当全部类别都停用时，插件自动退出拦截，不阻塞宿主。
+- **区分授权与故障**：显式路由全部未获授权时，原生选模工具可省略三参，使用宿主的子模型默认配置或兼容的父模型；没有选模工具的 Team Lead 若仍有继承类，可以按类别委派。要用显式路由，开放所需模型后新建会话。若提示 `authorization-unavailable`，表示无法读取授权，不是模型被拒；不会展示未经核实的路由，开启严格校验且有活跃类别时也不会放行省略三参的调用。
 - **团队工具动态化与兜底**：在未开启 `modelSelection` 的宿主或团队协作模式下，Lead 可调用 `team_route_delegate` 按活跃类别委派（并附带清晰的交卷验收证据要求），随时用 `team_route_status` 查询实时类别与执行历史。
 
 ---
@@ -140,7 +141,7 @@ dsh plugin --profile web add dsh-team-router@1.1.0
 | `writing` | 技术写作 | 面向读者的技术文档、手册、总结与结构化文字 | ✓ |
 | `scout` | 信息侦察 | 跨文件调用链、环境配置、长日志关键报错或文档出处：只读摘录 `path:line`、URL 或命令输出，标出盲区 | |
 
-单个已知文件或值直接读取。只有前情广且未知、证据清单能独立验收时，才考虑由 `scout` 为主责模型摸底；范围已清楚或与主责同模时，直接让主责端到端完成。`scout` 不改代码、不运行会改变状态的命令，也不拍板复杂根因或架构决策。
+单个已知文件或值直接读取。只有前情广且未知、证据清单能独立验收时，才考虑由 `scout` 为主责模型摸底；范围已清楚或与主责同模时，直接让主责端到端完成。`scout` 不改代码、不运行会改变状态的命令，也不拍板复杂根因或架构决策。证据摘要通常控制在约 5 KiB 内；证据不足或需要超长时说明原因，不为了缩短而省略权限阻塞或反证。
 
 ### 4. 通用与兜底（不参与主动委派）
 

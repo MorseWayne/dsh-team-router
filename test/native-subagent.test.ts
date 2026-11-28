@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { ToolCallId, createUserMessage } from '@deepseek-ai/dsh-llm';
 import type { GenerateOptions } from '@deepseek-ai/dsh-llm';
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection';
+import * as nativeTool from '@deepseek-ai/dsh-tool-subagent';
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import type { Agent, ModelSelection } from '@deepseek-ai/dsh-agent';
@@ -48,9 +50,10 @@ describe('core session routing plans', () => {
     const config = mixed();
     assert.deepEqual(validateNativeSubagentCall(config, call('unknown')), { ok: true });
     config.behavior.strict = true;
-    for (const malformed of [null, [], 'not-object', { provider: 'offline' }, { model: 'fast' }, { reasoning_effort: 'high' },
+    for (const malformed of [{ ...call('fast'), provider: '' }, call(''), call('fast', ''), null, [], 'not-object', { provider: 'offline' }, { model: 'fast' }, { reasoning_effort: 'high' },
       { provider: false, model: 'fast' }, { ...call('fast'), reasoning_effort: 0 }]) {
       assert.deepEqual(validateNativeSubagentCall(config, malformed), { ok: true });
+      assert.deepEqual(validateNativeSubagentCall(config, malformed, { authorizationUnavailable: true }), { ok: true });
     }
     assert.equal(validateNativeSubagentCall(config, {}).ok, true);
     assert.equal(validateNativeSubagentCall(config, call('review', 'high')).ok, true);
@@ -69,13 +72,49 @@ describe('core session routing plans', () => {
     assert.equal(validateNativeSubagentCall(allInherit, call('unconfigured')).ok, true);
   });
 
+  it('distinguishes denied explicit routes, pure inheritance, disabled routing and unreadable grants', () => {
+    const denied = { isRoot: true, authorizedRoutes: [] };
+    const outage = { isRoot: true, authorizationUnavailable: true };
+    const config = mixed({ strict: true, delegationMode: 'orchestrator' });
+    for (const render of [buildNativeSubagentGuidance, buildTeamFallbackGuidance]) {
+      assert.match(render(config, denied), /No explicit specialist route is authorized.*settings and start a new Session/);
+      assert.match(render(config, outage), /authorization-unavailable/);
+      for (const session of [denied, outage]) {
+        assert.doesNotMatch(render(config, session), /offline|review|fast|high/);
+        assert.equal(render({ ...config, behavior: { ...config.behavior, guidance: false } }, session), '');
+      }
+      assert.equal(render(safeRouting(), denied), '');
+    }
+    assert.match(buildNativeSubagentGuidance(config, denied), /Omit provider\/model\/reasoning_effort on host `subagent`/);
+    const teamAdvice = buildTeamFallbackGuidance(config, denied);
+    assert.match(teamAdvice, /`team_route_status`.*inherit category.*`team_route_delegate`/);
+    assert.doesNotMatch(teamAdvice, /subagent|provider\/model/);
+    const allExplicit = { ...config, defaultTarget: explicitTarget('private') };
+    const noFallback = buildTeamFallbackGuidance(allExplicit, denied);
+    assert.match(noFallback, /No explicit specialist route is authorized.*start a new Session/);
+    assert.doesNotMatch(noFallback, /private|team_route_delegate|team_route_status|subagent|offline|review|fast|high/);
+    for (const session of [denied, outage]) assert.equal(buildNativeSubagentReminder(config, session), '');
+    for (const args of [{}, call('review', 'high'), call('other')]) {
+      const result = validateNativeSubagentCall(config, args, outage);
+      assert.equal(result.ok, false);
+      if (!result.ok) assert.match(result.reason, /authorization-unavailable/);
+    }
+    assert.deepEqual(validateNativeSubagentCall(config, { model: 'partial' }, outage), { ok: true });
+    assert.deepEqual(validateNativeSubagentCall(mixed(), call('other'), outage), { ok: true });
+    for (const id of BUILTIN_IDS) config.builtins[id] = { enabled: false };
+    for (const render of [buildNativeSubagentGuidance, buildTeamFallbackGuidance]) {
+      assert.equal(render(config, denied), ''); assert.equal(render(config, outage), '');
+    }
+    assert.deepEqual(validateNativeSubagentCall(config, {}, outage), { ok: true });
+  });
+
   it('only suggests an optional scout evidence pack when scout itself is a specialist', () => {
     const config = mixed({ delegationMode: 'specialist-first' });
     config.builtins.scout = { enabled: true, binding: explicitTarget('fast', 'low') };
     const session = { isRoot: true, parentRoute: route('fast', 'high'), authorizedRoutes: [authorized('fast'), authorized('review')] };
     const renderers = [buildNativeSubagentGuidance, buildNativeSubagentReminder, buildTeamFallbackGuidance];
     for (const render of renderers) {
-      const hint = /Read one known item directly\..*scout may gather a reviewable read-only evidence pack.*owner handles it end to end/;
+      const hint = /Read known items directly\..*broad unknowns, scout may gather a read-only evidence pack.*clear scope or same model: owner handles it/;
       assert.match(render(config, session), hint);
       for (const context of [{ ...session, isRoot: false }, { ...session, parentRoute: route('fast', 'low') },
         { ...session, authorizedRoutes: [authorized('review')] }]) assert.doesNotMatch(render(config, context), /scout may gather/);
@@ -93,17 +132,17 @@ describe('core session routing plans', () => {
     const session = { isRoot: true, parentRoute: route('review', 'high'), authorizedRoutes: [authorized('review')] };
     const guidance = buildNativeSubagentGuidance(config, session);
     assert.match(guidance, /\("offline", "review", "high"\): ultrabrain/);
-    assert.match(guidance, /writing .*unauthorized; inherit parent model/);
+    assert.match(guidance, /Omit provider\/model\/reasoning_effort for host defaults or a compatible parent model: .*writing .*unauthorized/);
     assert.doesNotMatch(guidance, /"fast"|Specialist-first/);
     assert.equal(buildNativeSubagentReminder(config, session), '');
     const distinct = { ...session, parentRoute: route('review', 'low') };
     assert.match(buildNativeSubagentGuidance(config, distinct), /Specialist-first/);
-    assert.match(buildNativeSubagentReminder(config, distinct), /\("offline", "review", "high"\): ultrabrain \(Show conclusions/);
+    assert.match(buildNativeSubagentReminder(config, distinct), /\("offline", "review", "high"\): ultrabrain \(Conclusions/);
     assert.doesNotMatch(buildNativeSubagentReminder(config, distinct), /writing|"fast"|quick|unspecified/);
     assert.match(buildTeamFallbackGuidance(config, distinct), /team_route_status.*\n[\s\S]*categories: ultrabrain\./);
     assert.equal(buildNativeSubagentReminder(config, { ...distinct, isRoot: false }), '');
     assert.doesNotMatch(buildNativeSubagentGuidance(config, { ...distinct, isRoot: false }), /Specialist-first/);
-    assert.equal(buildNativeSubagentGuidance(config, { authorizedRoutes: [] }), '');
+    assert.match(buildNativeSubagentGuidance(config, { authorizedRoutes: [] }), /No explicit specialist route is authorized/);
     config.behavior.guidance = false;
     assert.equal(buildNativeSubagentGuidance(config, distinct), '');
     assert.equal(buildNativeSubagentReminder(config, distinct), '');
@@ -138,6 +177,131 @@ async function tool(h: NativeHarness, agent: Agent, args: Record<string, unknown
   return batch.results[0]!.result;
 }
 
+describe('released dsh-tool-subagent with offline live capabilities', { concurrency: false, timeout: 15_000 }, () => {
+  async function mount(h: NativeHarness, defaults?: ReturnType<typeof route>) {
+    const fiber = await h.ctx.plugin(nativeTool, { provider: 'spawn', modelSelection: true,
+      ...(defaults === undefined ? {} : { agentOptions: defaults }),
+    });
+    h.fibers.push(fiber);
+    return fiber;
+  }
+  it('enforces session authorization and effort preflight even when router strict is off', async t => {
+    const h = await NativeHarness.create({ routing: mixed() }); t.after(() => h.close());
+    await mount(h);
+    const root = await h.lead(); h.authorize(root, ['review']);
+    const probes = t.mock.method(h.adapter, 'resolveModel');
+    const denied = await tool(h, root, call('fast'), 'host-denied');
+    assert.equal(denied.isError, true);
+    assert.match(denied.content[0]!.text, /not allowed for this Session/);
+    assert.equal(probes.mock.callCount(), 0, 'Authorization precedes exact model lookup');
+    h.adapter.efforts.set('review', ['low']);
+    const unsupported = await tool(h, root, call('review', 'high'), 'host-effort');
+    assert.equal(unsupported.isError, true);
+    assert.match(unsupported.content[0]!.text, /does not support reasoning effort "high"/);
+    assert.equal(probes.mock.callCount(), 1);
+    assert.equal(h.created.length, 1);
+    assert.equal(h.adapter.requests.length, 0);
+  });
+
+  it('can accept the real activation after preflight but fail the child request when effort support drifts', async t => {
+    const h = await NativeHarness.create({ routing: mixed() }, false); t.after(() => h.close());
+    await mount(h);
+    const root = await h.lead(); h.authorize(root);
+    h.adapter.efforts.set('review', ['high']);
+    const probes = t.mock.method(h.adapter, 'resolveModel');
+    let lookupsBeforeChange = 0;
+    t.after(h.ctx.on('agent/created', ({ agent }) => {
+      if (agent.session.header.origin !== 'subagent') return;
+      lookupsBeforeChange = probes.mock.calls.filter(c => c.arguments[1] === 'review').length;
+      h.adapter.efforts.set('review', ['low']);
+    }));
+    const ended = Promise.withResolvers<string>();
+    t.after(h.ctx.on('subagent/end', info => { ended.resolve(info.stopReason); }));
+    const result = await tool(h, root, { ...call('review', 'high'), name: 'drift' }, 'host-drift');
+    assert.equal(result.isError, false);
+    assert.match(result.content[0]!.text, /started subagent drift/);
+    assert.equal(await ended.promise, 'error');
+    assert.equal(lookupsBeforeChange, 1, 'Only the real tool preflight resolved the model before creation');
+    assert.ok(probes.mock.calls.filter(c => c.arguments[1] === 'review').length > lookupsBeforeChange);
+    const child = h.created[1]!;
+    assert.ok(h.errors.some(e => e.agent === child && /does not support reasoning effort "high"/.test(String(e.error))));
+    assert.equal(h.requests(child).length, 0, 'The real child request failed capability validation before streaming');
+    assert.equal(h.created.length, 2, 'No automatic redispatch');
+  });
+
+  for (const configured of [false, true]) {
+    it(`omitted fields use ${configured ? 'configured child defaults' : 'compatible parent model and effort'}`, async t => {
+      const h = await NativeHarness.create({ routing: mixed() }); t.after(() => h.close());
+      await mount(h, configured ? route('fast', 'low') : undefined);
+      const root = await h.lead('defaults', 'high');
+      const result = await tool(h, root, {}, 'host-default');
+      assert.equal(result.isError, false);
+      const child = h.created[1]!; await h.idle(child, 1);
+      const { provider, model, reasoningEffort } = h.requests(child)[0]!;
+      assert.deepEqual({ provider, model, reasoningEffort }, configured ? route('fast', 'low') : route('strong', 'high'));
+    });
+  }
+
+  it('strict matches the configured grant and rejects unconfigured or mismatched native calls before preflight', async t => {
+    const h = await NativeHarness.create({ routing: mixed({ strict: true }) }); t.after(() => h.close());
+    await mount(h); const root = await h.lead(); h.authorize(root);
+    const probes = t.mock.method(h.adapter, 'resolveModel');
+    for (const [id, args] of [['wrong', call('strong')], ['wrong-effort', call('review', 'low')]] as const) {
+      const denied = await tool(h, root, args, id);
+      assert.equal(denied.isError, true); assert.match(denied.content[0]!.text, /Strict task-category routing/);
+    }
+    assert.equal(probes.mock.callCount(), 0); assert.equal(h.created.length, 1);
+    assert.equal((await tool(h, root, call('review', 'high'), 'host-match')).isError, false);
+    const child = h.created[1]!; await h.idle(child, 1);
+    assert.equal(h.requests(child)[0]!.model, 'review'); assert.equal(h.requests(child)[0]!.reasoningEffort, 'high');
+  });
+
+  it('fails closed only in strict mode on an unreadable router projection, without leaking routes in either prompt', async t => {
+    const config = mixed({ strict: true, delegationMode: 'orchestrator' });
+    const h = await NativeHarness.create({ routing: config }); t.after(() => h.close());
+    const mounted = await mount(h); const root = await h.lead(); h.authorize(root);
+    // Fault-inject only the router reader; the real tool still reads its own Session policy.
+    await h.unloadRouter();
+    const register = SessionProjectionRegistry.prototype.register;
+    const mock = t.mock.method(SessionProjectionRegistry.prototype, 'register', async function (definition, ...args) {
+      const handle = await register.call(this, definition, ...args);
+      if (definition.key === 'teamRouter.modelAuthorization') handle.stateOf = () => { throw new Error('private projection details'); };
+      return handle;
+    });
+    try { await h.reloadRouter(); } finally { mock.mock.restore(); }
+    const guide = await section(h, root) ?? '';
+    assert.match(guide, /authorization-unavailable/); assert.doesNotMatch(guide, /offline|review|fast|private projection details/);
+    await h.drive(root, 'go', 1);
+    assert.deepEqual(reminders(h.requests(root)[0]!), []);
+    for (const [id, args] of [['omitted', {}], ['explicit', call('review', 'high')]] as const) {
+      const denied = await tool(h, root, args, id);
+      assert.equal(denied.isError, true); assert.match(denied.content[0]!.text, /authorization-unavailable/);
+      assert.doesNotMatch(denied.content[0]!.text, /offline|review|fast|private projection details/);
+    }
+    for (const field of ['provider', 'model', 'reasoning_effort']) {
+      const malformed = await tool(h, root, { ...call('review', 'high'), [field]: '' }, `empty-${field}`);
+      assert.equal(malformed.isError, true);
+      assert.ok(malformed.content[0]!.text.includes(`child LLM \`${field}\` must be non-empty`));
+    }
+    assert.equal(h.created.length, 1);
+    config.behavior.strict = false; h.updatePolicy({ routing: config });
+    assert.equal((await tool(h, root, call('review', 'high'), 'advisory')).isError, false);
+    const child = h.created[1]!; await h.idle(child, 1);
+    assert.equal(h.requests(child)[0]!.model, 'review'); assert.equal(h.requests(child)[0]!.reasoningEffort, 'high');
+    await mounted.dispose();
+    assert.equal(h.ctx.agents.get(child.id), child, 'The non-Lead child is still live');
+    assert.equal(h.ctx.tools.get('subagent', child), undefined);
+    assert.equal(await section(h, child), '', 'No selectable tool or Lead fallback for this child');
+    assert.match(await section(h, root) ?? '', /authorization-unavailable/, 'Eligible Team Lead fallback');
+    config.behavior.guidance = false; h.updatePolicy({ routing: config });
+    assert.equal(await section(h, root), '');
+    config.behavior.guidance = true;
+    for (const id of BUILTIN_IDS) config.builtins[id] = { enabled: false };
+    h.updatePolicy({ routing: config });
+    assert.equal(await section(h, root), '', 'No active categories even though authorization is unreadable');
+  });
+});
+
 describe('native subagent routing integration', { concurrency: false, timeout: 30_000 }, () => {
   it('preserves classic7 and both strict extremes for literal pre-scout V3 settings', async t => {
     // Deliberately not derived from the current registry: this is the 1.0.0 on-disk ID set.
@@ -166,7 +330,7 @@ describe('native subagent routing integration', { concurrency: false, timeout: 3
     const root = await h.lead('solo');
     assert.equal(h.ctx.agentTeams.isEnabled(root), false);
     assert.equal(h.ctx.tools.get('team_route_delegate', root), undefined);
-    assert.equal(await section(h, root), '');
+    assert.match(await section(h, root) ?? '', /No explicit specialist route is authorized/);
     h.authorize(root);
     assert.match(await section(h, root) ?? '', /\("offline", "fast"\): writing/);
     h.updatePolicy({ routing: mixed({ delegationMode: 'specialist-first' }) });

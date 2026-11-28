@@ -58,7 +58,8 @@ describe('V3 category routing through native DSH', { concurrency: false, timeout
     const request = h.requests(child)[0]!;
     assert.equal(request.model, 'fast');
     const prompt = JSON.stringify(request.messages);
-    assert.match(prompt, /Read-only: cite brief path:line, URL or output excerpts and gaps/);
+    assert.match(prompt, /Read-only: facts, key path:line\/URL\/output excerpts, gaps/);
+    assert.match(prompt, /~5 KiB or less; explain thin evidence or overruns.*access blocks and counterevidence; no complex diagnosis/);
     assert.match(prompt, /No edits, state-changing commands, complex diagnoses or architecture decisions/);
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-team-router",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Configurable task categories and authorized model routing for native DeepSeek Harness delegation.",
   "type": "module",
   "repository": {
@@ -73,6 +73,7 @@
     "@deepseek-ai/dsh-system-prompt": "0.2.2-rc.5",
     "@deepseek-ai/dsh-working-directory": "0.2.2-rc.5",
     "@deepseek-ai/dsh-tool-executor-native": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-tool-subagent": "0.2.2-rc.5",
     "@deepseek-ai/dsh-fs-local": "0.2.2-rc.5",
     "@deepseek-ai/dsh-session-persistence-jsonl": "0.2.2-rc.5",
     "@deepseek-ai/dsh-session-query-sqlite": "0.2.2-rc.5",

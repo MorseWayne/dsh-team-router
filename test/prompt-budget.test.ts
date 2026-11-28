@@ -30,27 +30,63 @@ test('combines same-model same-effort routes, separates effort and emits one inh
     assert.doesNotMatch(output, /"blocked"/);
     assert.match(output, /missing effort = omit it/);
   }
-  const inheritance = guide.split('\n').filter(line => line.startsWith('Inherit — omit provider/model/reasoning_effort:'));
+  const inheritance = guide.split('\n').filter(line => line.startsWith('Omit provider/model/reasoning_effort for host defaults or a compatible parent model:'));
   assert.equal(inheritance.length, 1);
-  assert.match(inheritance[0]!, /unspecified .*unauthorized; inherit parent model/);
-  assert.doesNotMatch(reminder, /unspecified|quick|Inherit —/);
+  assert.match(inheritance[0]!, /unspecified .*configured route unauthorized/);
+  assert.doesNotMatch(reminder, /unspecified|quick|Omit provider\/model/);
 });
 
-test('keeps 13 built-ins + 8 custom categories within budget while retaining all IDs and metadata', t => {
+function fullFixture(multi = false, chinese = false) {
   const config = createDefaultRoutingConfig(); config.defaultTarget = route;
   config.behavior.delegationMode = 'orchestrator';
-  const purpose = 'Check evidence and state what remains uncertain. '.repeat(3).slice(0, 120);
-  const avoid = 'Do not infer facts without reliable sources. '.repeat(2).slice(0, 80);
+  const purpose = (chinese ? '核对关键证据并列出尚未验证之处。' : 'Check evidence and state what remains uncertain. ').repeat(10).slice(0, 120);
+  const avoid = (chinese ? '不可忽略反证或权限阻塞。' : 'Do not infer facts without reliable sources. ').repeat(10).slice(0, 80);
   config.custom = Array.from({ length: MAX_CUSTOM_CATEGORIES }, (_, index) => custom(`custom-study-${index}`, purpose, avoid));
+  if (multi) {
+    const tuples = [
+      ['antigravity-acp', 'gemini-4-neon', 'high'], ['openai-codex', 'gpt-6.2-astra', 'high'],
+      ['openai-codex', 'gpt-6.2-astra', 'xhigh'], ['aisub2api', 'gpt-6.2-sol', 'high'],
+      ['openai-codex', 'gpt-6.2-sol', 'high'], ['antigravity-acp', 'gemini-4-carbon', 'high'],
+      ['antigravity-acp', 'gemini-4-hydrogen', 'high'], ['antigravity-acp', 'gemini-3.8-flash', 'low'],
+    ] as const;
+    for (const [i, id] of BUILTIN_IDS.entries()) {
+      const [provider, model, reasoningEffort] = tuples[i % tuples.length]!;
+      const binding = { mode: 'explicit', provider, model, reasoningEffort } as const;
+      config.builtins[id] = { enabled: true, binding };
+      if (id === 'deep') config.defaultTarget = binding;
+    }
+  }
+  return config;
+}
+
+for (const [label, multi, chinese, maxSystemBytes, maxReminderBytes] of [
+  ['single', false, false, 3800, 2250], ['eight tuples', true, false, 4100, 2570],
+  ['eight tuples + Chinese', true, true, 7300, 3200],
+] as const) {
+  test(`measures UTF-8 prompt budgets: ${label}`, t => {
+    const config = fullFixture(multi, chinese);
+    const guide = buildNativeSubagentGuidance(config, context);
+    const reminder = buildNativeSubagentReminder(config, context);
+    const systemBytes = Buffer.byteLength(guide, 'utf8'), reminderBytes = Buffer.byteLength(reminder, 'utf8');
+    t.diagnostic(`${label}: system ${guide.length} chars / ${systemBytes} bytes; step-1 ${reminder.length} chars / ${reminderBytes} bytes`);
+    assert.ok(systemBytes <= maxSystemBytes, `${systemBytes} > ${maxSystemBytes} bytes`);
+    assert.ok(reminderBytes <= maxReminderBytes, `${reminderBytes} > ${maxReminderBytes} bytes`);
+    assert.equal(reminder.split('\n').filter(row => row.startsWith('(')).length, multi ? 8 : 1);
+  });
+}
+
+test('keeps 13 built-ins + 8 custom categories within budget while retaining all IDs and metadata', t => {
+  const config = fullFixture();
   const guide = buildNativeSubagentGuidance(config, context);
   const reminder = buildNativeSubagentReminder(config, context);
   t.diagnostic(`Full same-tuple fixture: system ${guide.length} chars; step-1 ${reminder.length} chars`);
   const fallback = buildTeamFallbackGuidance(config, context);
   for (const system of [guide, fallback]) assert.match(system, /scope, checks, and when to stop and hand back/);
   for (const output of [guide, fallback, reminder]) {
-    assert.match(output, /One owner per deliverable, not keywords; split only independently verifiable work, keeping fan-out lean/);
+    assert.match(output, /One owner per deliverable, not keywords; split only independently verifiable work/);
+    assert.match(output, /No closing text.*effects.*[Cc]heck files and prior messages before claiming completion or retrying/);
   }
-  assert.match(reminder, /^\[team-router: orchestrator\] Orchestrator:/);
+  assert.match(reminder, /^\[team-router: orchestrator\] must delegate/);
   assert.match(reminder, /scout \(Read-only:/);
   assert.ok(guide.length < 3_800, `guidance used ${guide.length} chars`);
   assert.ok(reminder.length < 2_400, `reminder used ${reminder.length} chars`);
@@ -58,7 +94,7 @@ test('keeps 13 built-ins + 8 custom categories within budget while retaining all
   for (const id of [...BUILTIN_IDS, ...config.custom.map(c => c.id)]) assert.ok(guide.includes(id), id);
   assert.equal(guide.split('\n').filter(s => s.startsWith('{"id":')).length, MAX_CUSTOM_CATEGORIES);
   assert.match(reminder, /must delegate.*post-approval implementation/);
-  assert.match(reminder, /host `subagent`.*namespaced|namespaced or bridged/);
+  assert.match(reminder, /host `subagent`.*bridged.*not adapter-local tools/);
 });
 
 test('quotes custom role/tuple text as JSON without extra lines or misleading route rows', () => {

@@ -17,7 +17,7 @@ function catalog(): ModelCatalog {
 }
 
 test('ships a frozen versioned exact manifest with diverse makers for all thirteen categories', () => {
-  assert.equal(RECOMMENDATION_VERSION, '2026-11-27.2');
+  assert.equal(RECOMMENDATION_VERSION, '2026-11-28.1');
   assert.deepEqual(Object.keys(RECOMMENDATION_CANDIDATES), BUILTIN_IDS);
   assert.ok(Object.isFrozen(RECOMMENDATION_CANDIDATES));
   for (const id of BUILTIN_IDS) {
@@ -77,6 +77,27 @@ test('prefers fast models, requests only an exact advertised low effort on fallb
         { mode: 'explicit', provider: 'google', model: 'gemini-2.5-flash' });
     }
   }
+});
+
+test('selects exact ACP Flash for scout without changing quick or overwriting manual settings', () => {
+  const provider = 'antigravity-acp', model = 'gemini-3.8-flash';
+  for (const efforts of [['low'], ['high'], ['LOW'], undefined]) {
+    const available: ModelCatalog = { failures: [], groups: [{ id: provider, name: provider, models: [{ id: model, name: model,
+      ...(efforts && { reasoning: { efforts: efforts.map(id => ({ id, name: id })) } }),
+    }] }] };
+    const config = createDefaultRoutingConfig();
+    const result = previewRecommendations(config, available);
+    assert.deepEqual(result.config.builtins.scout?.binding, { mode: 'explicit', provider, model,
+      ...(efforts?.includes('low') && { reasoningEffort: 'low' }),
+    });
+    assert.ok(result.unavailable.includes('quick'));
+    const manual = { mode: 'explicit', provider: 'manual', model: 'my-model' } as const;
+    config.builtins.scout!.binding = manual;
+    assert.deepEqual(previewRecommendations(config, available).config.builtins.scout?.binding, manual);
+  }
+  assert.deepEqual(RECOMMENDATION_CANDIDATES.quick.slice(0, 3).map(c => [c.provider, c.model]), [
+    ['openai-codex', 'gpt-5.4-mini'], ['antigravity', model], ['deepseek', 'deepseek-chat'],
+  ]);
 });
 
 test('scopes group previews, skips disabled categories and never recommends in custom categories', () => {

@@ -268,11 +268,15 @@ export class TeamRouter {
     try { return this.ctx.subagents.rootOf(agent) === agent; }
     catch { return false; }
   }
+  private sessionAuthorization(agent: Agent): Pick<SessionRouteContext, 'authorizedRoutes' | 'authorizationUnavailable'> {
+    try { return { authorizedRoutes: this.authorization.stateOf(agent.session) }; }
+    catch { return { authorizationUnavailable: true }; }
+  }
   private guidanceState(agent: Agent) {
-    try {
-      const config = readRoutingConfig(this.configuration);
-      if (config.behavior.guidance) return { config, authorizedRoutes: this.authorization.stateOf(agent.session) };
-    } catch { /* Invalid configuration or unavailable authorization; don't advertise routes. */ }
+    let config: ReturnType<typeof readRoutingConfig>;
+    try { config = readRoutingConfig(this.configuration); }
+    catch { return undefined; }
+    if (config.behavior.guidance) return { config, authorization: this.sessionAuthorization(agent) };
     return undefined;
   }
   private renderPromptGuidance(agent: Agent | undefined, modelSelection: Readonly<ModelSelection> | undefined): string {
@@ -280,7 +284,7 @@ export class TeamRouter {
     const state = this.guidanceState(agent);
     if (state === undefined) return '';
     const session: SessionRouteContext = {
-      authorizedRoutes: state.authorizedRoutes,
+      ...state.authorization,
       parentRoute: modelSelection ?? agent.model?.current() ?? parentAgentOptionsForDelegation(agent),
       isRoot: this.isLiveRoot(agent),
     };
@@ -315,11 +319,11 @@ export class TeamRouter {
       if (decision.kind !== 'enter' || signal.aborted || this.stopped
         || !this.isLiveRoot(agent) || !decision.messages.some(message => message.source.kind === 'user')) return decision;
       const state = this.guidanceState(agent);
-      if (state === undefined || state.config.behavior.delegationMode === 'passive') return decision;
+      if (state === undefined || state.authorization.authorizationUnavailable || state.config.behavior.delegationMode === 'passive') return decision;
       // Do not gate on the unnamespaced tool's presence: a provider bridge
       // can expose the model-selecting host tool under its own namespace.
       const text = buildNativeSubagentReminder(state.config, {
-        authorizedRoutes: state.authorizedRoutes,
+        ...state.authorization,
         parentRoute: modelSelection ?? agent.model?.current() ?? parentAgentOptionsForDelegation(agent), isRoot: true,
       });
       if (text === '') return decision;
@@ -337,11 +341,9 @@ export class TeamRouter {
       try { config = readRoutingConfig(this.configuration); }
       catch { return next(); }
       if (!config.behavior.strict) return next();
-      let authorizedRoutes: AuthorizedRoute[] | null;
-      try { authorizedRoutes = this.authorization.stateOf(agent.session); }
-      catch { authorizedRoutes = []; }
-      const parentRoute = parentAgentOptionsForDelegation(agent);
-      const verdict = validateNativeSubagentCall(config, exec.arguments, { authorizedRoutes, parentRoute });
+      const verdict = validateNativeSubagentCall(config, exec.arguments, {
+        ...this.sessionAuthorization(agent), parentRoute: parentAgentOptionsForDelegation(agent),
+      });
       if (!verdict.ok) return Promise.resolve({ kind: 'deny', reason: verdict.reason });
       return next();
     });

@@ -10,6 +10,8 @@ export interface ExplicitNativeRoute extends RoutePair {
 export interface SessionRouteContext {
     /** undefined: no filter; null: parent pair only; list: exact Session grants. */
     readonly authorizedRoutes?: readonly RoutePair[] | null;
+    /** The Session projection failed to read; neither grants nor fallback are verified. */
+    readonly authorizationUnavailable?: boolean;
     readonly parentRoute?: {
         readonly provider?: string;
         readonly model?: string;
